@@ -30,10 +30,13 @@ if ($LastExitCode -ne 0) {
 }
 Write-Host "GitHub CLI auth check succeeded."
 
-# 4. Prepare release folder
+# 4. Prepare release folder and clean old App03 files
 $releaseDir = "release"
 if (-not (Test-Path $releaseDir)) {
     New-Item -Path $releaseDir -ItemType Directory | Out-Null
+} else {
+    # Clean up legacy App03 files to prevent clutter
+    Get-ChildItem $releaseDir -Filter "App03_*" | Remove-Item -Force
 }
 
 # 5. Compile AHK Script using CMD to guarantee synchronous execution and correct path parsing
@@ -74,14 +77,14 @@ Write-Host "[3/6] Compiling ZIP archive..."
 Compress-Archive -Path $outputExePath -DestinationPath $outputZipPath
 Write-Host "ZIP archive created: $outputZipName"
 
-# 7. Create corporate copy (App03_ClipOCR-Pro)
-Write-Host "[4/6] Creating App03_ClipOCR-Pro copies..."
-$app03ExePath = Join-Path $releaseDir "App03_ClipOCR-Pro.exe"
-$app03ZipPath = Join-Path $releaseDir "App03_ClipOCR-Pro.zip"
+# 7. Create corporate copy (App03_ClipOCR-Pro_v[Version])
+Write-Host "[4/6] Creating App03_ClipOCR-Pro_v$version copies..."
+$app03ExePath = Join-Path $releaseDir "App03_ClipOCR-Pro_v$version.exe"
+$app03ZipPath = Join-Path $releaseDir "App03_ClipOCR-Pro_v$version.zip"
 
 Copy-Item -Path $outputExePath -Destination $app03ExePath -Force
 Copy-Item -Path $outputZipPath -Destination $app03ZipPath -Force
-Write-Host "Corporate copy files created (App03_ClipOCR-Pro.exe and App03_ClipOCR-Pro.zip)"
+Write-Host "Corporate copy files created (App03_ClipOCR-Pro_v$version.exe and App03_ClipOCR-Pro_v$version.zip)"
 
 # 8. Git Commit and Push
 Write-Host "[5/6] Committing and pushing git changes..."
@@ -96,7 +99,7 @@ if ($gitStatus) {
 }
 
 # 9. GitHub Release creation and asset upload
-Write-Host "[6/6] Creating GitHub Release and uploading assets..."
+Write-Host "[6/6] Creating/Updating GitHub Release and uploading assets..."
 $tag = "v$version"
 
 $releaseExists = $true
@@ -111,12 +114,14 @@ if ($LastExitCode -ne 0) {
 }
 
 if ($releaseExists) {
-    Write-Host "Release $tag already exists. Updating release assets..."
-    gh release upload $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --clobber
-} else {
-    Write-Host "Creating new release $tag and uploading assets..."
-    gh release create $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --title $tag --notes "Release $tag"
+    Write-Host "Release $tag already exists. Deleting it to refresh all assets..."
+    gh release delete $tag -y >$null 2>&1
+    # Give GitHub API a moment to process deletion
+    Start-Sleep -Seconds 2
 }
+
+Write-Host "Creating new release $tag and uploading assets..."
+gh release create $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --title $tag --notes "Release $tag"
 
 Write-Host "=========================================="
 Write-Host " Build and Release Pipeline completed successfully!"
