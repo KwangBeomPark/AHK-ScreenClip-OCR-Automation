@@ -30,13 +30,14 @@ if ($LastExitCode -ne 0) {
 }
 Write-Host "GitHub CLI auth check succeeded."
 
-# 4. Prepare release folder and clean old App03 files
+# 4. Prepare release folder and clean old files
 $releaseDir = "release"
 if (-not (Test-Path $releaseDir)) {
     New-Item -Path $releaseDir -ItemType Directory | Out-Null
 } else {
-    # Clean up legacy App03 files to prevent clutter
+    # Clean up legacy App03 files and old ClipOCR-Pro versions to prevent clutter
     Get-ChildItem $releaseDir -Filter "App03_*" | Remove-Item -Force
+    Get-ChildItem $releaseDir -Filter "ClipOCR-Pro.v*" | Remove-Item -Force
 }
 
 # 5. Compile AHK Script using CMD to guarantee synchronous execution and correct path parsing
