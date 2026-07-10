@@ -22,7 +22,7 @@ It is designed especially for finance, accounting, sales administration, credit 
 ## Core Features
 
 - **📸 Screen Area Capture**: Capture any selected area with a hotkey and keep it as a floating always-on-top reference window.
-- **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, and simple visual notes during review.
+- **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, arrows, numbered pins, text notes, and mosaic masking for sensitive information.
 - **🌐 Selected Text Translation**: Translate selected text using the configured translation workflow.
 - **🖼️ Image Translation Workflow**: Send captured images to Google Image Translation when needed for email attachments, scanned documents, and overseas evidence.
 - **📐 Image Resize & Copy**: Resize captured images to a configured width from 400 to 1600 px before pasting them into documents, emails, or reports.
@@ -71,7 +71,7 @@ If no release file is available yet, please build or run the source using AutoHo
 </p>
 
 ✔ **Capture Window**: Capture a selected screen area and keep it as an always-on-top floating image.  
-✔ **Annotation**: Add red boxes, highlights, and quick visual emphasis to captured images.  
+✔ **Annotation**: Add red boxes, highlights, arrows, numbered pins, text notes, and mosaic masking to captured images.  
 ✔ **Translation**: Translate selected text or use image translation workflows when working with foreign-language documents.  
 ✔ **Copy / Save / Resize**: Copy, save, resize, or reuse captured images based on app settings.  
 ✔ **Window Management**: Minimize, restore, align, resize, or close floating capture windows using shortcuts.
@@ -92,8 +92,9 @@ If no release file is available yet, please build or run the source using AutoHo
 | `Ctrl + C` on floating window | Copy the floating image |
 | `Ctrl + 0` on floating window | Save Original Size as the default and immediately copy the current image at its original dimensions |
 | `Ctrl + 1` through `Ctrl + 7` on floating window | Set width from 400 to 1600 px and immediately copy the current image |
-| `Ctrl + S` on floating window | Save a JPG to Desktop using the current width and outline settings |
+| `Ctrl + S` on floating window | Save a JPG to the configured save folder (default: Desktop) using the current width and outline settings |
 | `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | Red box, yellow highlight, green highlight, undo |
+| Right-click menu → Arrow / Number Pin / Mosaic | Draw a directional arrow, stamp auto-incrementing numbered pins, or pixelate an area to mask sensitive information |
 | `Ctrl + ↑`, `Ctrl + ↓`, `Ctrl + ←`, `Ctrl + Esc` on floating window | Minimize, restore original size, align left, close all |
 
 ---
@@ -106,7 +107,7 @@ ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 HKCU\Software\ScreenClipTool
 ```
 
-Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), copied/saved image outline, selected-text translation language, translation hotkey, and image translation menu languages. Clipboard copies remain Windows bitmaps for broad paste compatibility; the tooltip size is an estimate for a JPG saved at quality 85.
+Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. Clipboard copies remain Windows bitmaps for broad paste compatibility; the tooltip size is an estimate for a JPG saved at quality 85.
 
 Opening the About tab checks the latest GitHub release. `View Update` is enabled only when a newer version exists; it opens the matching GitHub Release page without downloading or installing anything.
 
@@ -126,6 +127,9 @@ If a team needs shared defaults, export and distribute the values under the Regi
 - Local capture, annotation, copy, save, and resize actions are handled on the user's PC.
 - Outlook web mail estimates are calculated only from the local clipboard and do not send message content externally. Actual sent size may differ.
 - When translation features are used, selected text or images may be processed through external translation services such as Google Translate, depending on the configured workflow.
+- Before the first translation, a one-time consent notice is shown so users can confirm that no sensitive data is being sent to an external service.
+- In the default configuration, the app downloads no external images at runtime: the GitHub icon is a bundled asset, and the sponsor button auto-download is off by default — helpful on restricted corporate networks.
+- The Mosaic annotation tool can pixelate account numbers, names, or other sensitive areas before a capture is shared.
 - Avoid translating or storing passwords, API keys, personal credentials, confidential financial data, or highly sensitive documents through external services.
 - Review exported Registry settings before distributing them to colleagues, especially if they contain workflow-specific values.
 

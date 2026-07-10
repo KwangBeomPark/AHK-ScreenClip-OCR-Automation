@@ -64,7 +64,7 @@ assets/github_icon.png
 | `assets/ClipOCR-Pro.ico` | 앱 아이콘 | 16/24/32/48/64/128/256 멀티사이즈 ICO, Ahk2Exe 실행 파일 아이콘으로 포함 |
 | `assets/demo.gif` | README 데모 이미지 | 공개 전 대표 프레임에 민감정보가 없는지 확인 |
 | `assets/manual.png` | README 매뉴얼 인포그래픽 | 주요 기능과 단축키를 한 장으로 요약 |
-| `assets/github_icon.png` | 보조 이미지 자산 | 현재 런타임 필수 파일은 아니며 자산 폴더로 분류 |
+| `assets/github_icon.png` | About 화면 GitHub 아이콘 | 런타임 다운로드 대신 번들 자산으로 로드(`PrepareBundledGithubIcon`), 컴파일 시 `FileInstall`로 임베드 |
 
 ### 저장소 제외 권장
 
@@ -119,11 +119,13 @@ graph TD
 | 화면 영역 캡처 | `src/ClipOCR-Pro.ahk` | `ScreenClip2Win`, `SelectArea` | DPI와 멀티 모니터 좌표계 유지 |
 | 플로팅 캡처 창 | `src/ClipOCR-Pro.ahk` | `CreateClipWin`, `ClipWins` | 창 상태는 `HWND` 기반 `Map`에 저장 |
 | 클립보드 이미지 출력 | `src/ClipOCR-Pro.ahk` | `CopyBitmapToClipboard`, `CreateOutputBitmap`, `GetEstimatedJpegSize` | 선택한 고정 가로폭으로 확대/축소, 선택적 아웃라인, CF_DIB 호환성 유지 |
-| JPG 파일 저장 | `src/ClipOCR-Pro.ahk` | `SaveBitmapToDesktop`, `SaveJpegBitmapToFile` | 가로폭/아웃라인 적용, 품질 85, Desktop 저장 |
+| JPG 파일 저장 | `src/ClipOCR-Pro.ahk` | `SaveBitmapToDesktop`, `SaveJpegBitmapToFile`, `GetUniqueFilePath`, `GetSaveFolder`, `SetSaveFolder` | 가로폭/아웃라인 적용, 품질 85, 저장 위치는 `SaveFolder` 설정(미설정 시 Desktop), 같은 초 파일명 충돌 시 `_2`,`_3` 접미사로 덮어쓰기 방지 |
+| 번역 개인정보 동의 | `src/ClipOCR-Pro.ahk` | `EnsureTranslationConsent`, `TranslateConsent` | 텍스트/이미지 번역 최초 실행 전 1회 경고, 동의는 Registry에 저장 |
+| UI 문자열 다국어화 | `src/ClipOCR-Pro.ahk` | `UIText`, `BuildUIStringTable`, `GetUILang`, `GetDefaultUILang` | 핵심 툴팁만 `MANUAL_LANG` 기준 6개 언어 지원(점진 적용), 미번역 키는 영어 fallback, `{name}` 플레이스홀더 치환 |
 | Outlook 웹메일 용량 추정 | `src/ClipOCR-Pro.ahk` | `EstimateOutlookWebMailSize`, `IsSupportedOutlookWebMailHost`, `CalculateOutlookWebMailBytes` | `Ctrl+Win+0`, 첨부 제외, 영어 툴팁, 보수적 MB 추정 |
-| 주석 그리기 | `src/ClipOCR-Pro.ahk` | `SCW_ApplyAnnotation`, `WM_LBUTTONDOWN`, `DrawRectPreview` | UndoStack과 GDI+ 포인터 해제 필요 |
+| 주석 그리기 | `src/ClipOCR-Pro.ahk` | `SCW_ApplyAnnotation`, `WM_LBUTTONDOWN`, `DrawRectPreview`, `DrawVectorPreview` | 모드: Red/Yellow/Green(드래그), Text/Number(클릭), Arrow(드래그·방향), Mosaic(드래그·픽셀화). Number는 `ClipWins[hwnd].AnnotSeq` 증가, Arrow/Number/Mosaic는 우클릭 메뉴로만 시작. UndoStack과 GDI+ 포인터 해제 필요 |
 | Undo | `src/ClipOCR-Pro.ahk` | `SCW_Undo` | 버려지는 비트맵 포인터 해제 필요 |
-| 선택 텍스트 번역 | `src/ClipOCR-Pro.ahk` | `TranslateSelectedText`, `TranslateTextViaGoogle` | 외부 번역 서비스 전송 주의 |
+| 선택 텍스트 번역 | `src/ClipOCR-Pro.ahk` | `TranslateSelectedText`, `TranslateTextViaGoogle` | 외부 번역 서비스 전송 주의, 최초 실행 시 `EnsureTranslationConsent` 동의 게이트 |
 | 번역 응답 파싱 | `src/ClipOCR-Pro.ahk` | `ParseGoogleTranslateResponse` | Google 응답 구조 변경 가능성 있음 |
 | 번역 팝업 | `src/ClipOCR-Pro.ahk` | `ShowTextTranslationPopup`, `GetPopupPositionNearMouse` | AlwaysOnTop 및 화면 밖 표시 주의 |
 | 이미지 번역 | `src/ClipOCR-Pro.ahk` | `GoogleImageTranslate`, `AutoPasteToGoogleTranslate` | 브라우저 포커스와 웹 UI 변경에 취약 |
@@ -138,7 +140,7 @@ graph TD
 
 | 이름 | 용도 | 주의사항 |
 | --- | --- | --- |
-| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | 현재 `1.2.3`; EXE 파일 버전은 `1.2.3.0`, README/릴리즈 표기와 맞춰 관리 |
+| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | 현재 `1.3.0`; EXE 파일 버전은 `1.3.0.0`, README/릴리즈 표기와 맞춰 관리 |
 | `APP_ICON_PATH` | 실행 중 사용할 아이콘 경로 | 컴파일 실행 시 `A_ScriptFullPath`, 소스 실행 시 `src/../assets/ClipOCR-Pro.ico` |
 | `APP_SOURCE_ICON_PATH` | 소스 실행 fallback 아이콘 경로 | `assets/ClipOCR-Pro.ico` 이동 시 함께 수정 필요 |
 | `REG_PATH` | 사용자 설정 Registry 경로 | 기존 사용자 설정 호환성을 위해 변경 금지 |
@@ -155,7 +157,8 @@ graph TD
 | `TEXT_TRANSLATE_HOTKEY` | 선택 텍스트 번역 단축키 | `Win+CapsLock`은 정적 기본 단축키로 유지 |
 | `TEXT_TRANSLATE_FONT_SIZE` | 번역 팝업 글자 크기 | 실사용 범위로 정규화 |
 | `IMAGE_TRANSLATE_LANGS` | 이미지 번역 메뉴 언어 목록 | 콤마 구분 문자열로 저장 |
-| `MANUAL_LANG` | 매뉴얼 다이얼로그 기본 언어 | `ManualLang` Registry value 사용 |
+| `MANUAL_LANG` | 매뉴얼 다이얼로그 및 핵심 툴팁 UI 언어 | `ManualLang` Registry value 사용, 미설정 시 `GetDefaultUILang()`로 시스템 로캘 기반 기본값 |
+| `TRANSLATE_CONSENT` | 외부 번역 서비스 전송 최초 동의 여부 | `TranslateConsent` Registry value(`1`) 사용, 미동의 시 번역 진입점에서 취소 |
 | `ClipWins` | 플로팅 캡처 창 상태 저장 | Key는 `HWND`, Value는 상태 object |
 | `RightClickedHwnd` | 우클릭 메뉴 대상 창 | 메뉴 핸들러에서 대상 확인 |
 | `TextTranslatePopupHwnd` | 현재 번역 팝업 HWND | 새 팝업 표시 전 기존 팝업 정리 |
@@ -164,7 +167,9 @@ graph TD
 | `MAIL_SIZE_CHECK_RUNNING` | 메일 용량 추정 중복 실행 방지 | 모든 성공/실패 경로에서 `false`로 복구 |
 | `GITHUB_RELEASES_URL`, `GITHUB_LATEST_RELEASE_API` | 업데이트 페이지와 최신 릴리즈 API 주소 | 공식 저장소 `KwangBeomPark/ClipOCR-Pro`만 사용 |
 | `UPDATE_CHECK_STATE` | 비동기 GitHub 확인 요청과 About UI 상태 | 요청 객체, 타임아웃, 최신 버전, 버튼 컨트롤을 보관하고 설정창 종료 시 분리 |
-| `ENABLE_BMC_AUTO_DOWNLOAD` | 후원 버튼 이미지 자동 다운로드 제어 | 현재 `true`; 회사망에서 외부 이미지 다운로드를 제한하려면 `false`로 변경 |
+| `ENABLE_BMC_AUTO_DOWNLOAD` | 후원 버튼 이미지 자동 다운로드 제어 | 현재 `false`(기본 OFF); About 화면 BMC 이미지 로드도 이 플래그로 게이트하여 기본 구성에서 외부 다운로드/임시 이미지 로드 없음 |
+| `APP_TEMP_DIR` | 앱 전용 임시 폴더 경로 | `A_Temp\ClipOCR-Pro`; 다운로드/추출 자산과 용량 추정 임시 파일 보관 |
+| `SAVE_FOLDER` | Ctrl+S JPG 저장 위치 | `SaveFolder` Registry value 사용, 빈 값이면 Desktop(하위호환), 설정창 General 탭 Browse로 변경 |
 
 출력 관련 Registry value:
 
@@ -174,6 +179,8 @@ graph TD
 | `CopyOutline` | 출력 이미지 1px 검정 아웃라인 | `1`; `0`은 비활성 |
 | `Scale` | 과거 퍼센트 스케일 설정 | 삭제하지 않지만 신규 출력 로직에서는 사용하지 않음 |
 | `ManualLang` | 매뉴얼 다이얼로그 언어 | `en`; 허용값: `ko`, `en`, `pl`, `de`, `fr`, `es` |
+| `TranslateConsent` | 외부 번역 전송 최초 동의 플래그 | 미설정이 기본(미동의); `1`이면 동의 완료로 경고 생략 |
+| `SaveFolder` | Ctrl+S JPG 저장 폴더 | 빈 값이 기본(Desktop); 존재하지 않는 경로는 로드 시 무시하고 Desktop으로 대체 |
 
 Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-Pro.lnk` 바로가기로 관리한다. 기존 버전의 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ScreenClipTool` 값은 legacy 상태로 인식하되, 새 설정을 저장할 때 제거한다.
 
@@ -188,6 +195,7 @@ Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-
 | `gui`, `picCtrl` | AHK GUI와 이미지 컨트롤 |
 | `IsMinimized`, `id`, `NumText`, `NumBg` | 미니 모드 표시 상태 |
 | `UndoStack` | 주석 Undo용 비트맵 포인터 스택 |
+| `AnnotSeq` | 번호 핀(Number) 다음 표시 숫자(1부터 증가, Undo 시 감소하지 않음) |
 | `orgX`, `orgY` | 최소화 전 위치 |
 
 ---
@@ -224,8 +232,8 @@ Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-
 | About 화면 | Buy Me a Coffee 링크 | 사용자가 공개 유지 선택 |
 | About 화면 | `api.github.com/repos/KwangBeomPark/ClipOCR-Pro/releases/latest` | 탭 최초 진입 또는 `Check Again` 시 최신 공개 릴리즈 메타데이터만 조회 |
 | About 화면 | `github.com/KwangBeomPark/ClipOCR-Pro/releases/...` | 원격 버전이 더 높을 때만 `View Update` 버튼을 활성화하며 브라우저로 페이지를 열고 다운로드/설치는 하지 않음 |
-| 앱 실행 중 | Google favicon 다운로드 | GitHub 아이콘 표시 목적, 실패해도 기본 링크 표시 |
-| 앱 실행 중 | BMC 버튼 다운로드 | 현재 `ENABLE_BMC_AUTO_DOWNLOAD := true`; 실패 시 텍스트 링크로 대체 |
+| (제거됨) | ~~Google favicon 다운로드~~ | 런타임 외부 다운로드를 제거하고 번들 `assets/github_icon.png`를 로드하도록 변경 |
+| 앱 실행 중 | BMC 버튼 다운로드 | 기본 OFF(`ENABLE_BMC_AUTO_DOWNLOAD := false`); 활성화 시에만 다운로드하며 미활성 시 텍스트 링크 표시 |
 | 텍스트 번역 | `translate.googleapis.com` | 선택 텍스트가 외부 서비스로 전송될 수 있음 |
 | 이미지 번역 | `translate.google.com` | 캡처 이미지가 외부 서비스로 전송될 수 있음 |
 
@@ -270,7 +278,29 @@ Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-
 
 ---
 
-## 11. 변경 이력
+## 11. 멀티모니터 / DPI 수동 테스트 체크리스트
+
+좌표·창 위치·캡처 로직은 자동 테스트로 회귀를 잡기 어렵다. 캡처, 정렬, 다이얼로그 위치 관련 코드를 수정한 뒤에는 아래 항목을 수동으로 점검한다.
+
+전제:
+
+* 앱은 `SetThreadDpiAwarenessContext(-4)`(Per-Monitor DPI Aware V2)로 물리 픽셀 좌표를 사용한다.
+* 가능하면 배율이 서로 다른 2대 이상 모니터, 세로 모니터, 보조 모니터가 주 모니터 왼쪽/위(음수 좌표)에 있는 배치를 포함한다.
+
+| # | 환경 | 확인 항목 | 기대 결과 |
+| --- | --- | --- | --- |
+| T1 | 100% + 150% 혼합 DPI 2모니터 | 각 모니터에서 `Win+드래그` 캡처 | 선택한 영역과 실제 캡처 이미지의 범위·비율이 일치 |
+| T2 | 보조 모니터가 주 모니터 왼쪽/위(음수 좌표) | 보조 모니터에서 캡처 및 플로팅 창 생성 | 창이 지정 좌표에 정확히 뜨고 잘리지 않음 |
+| T3 | 2모니터 이상 | `Ctrl+←` 전체 정렬 반복 | 정렬 대상 모니터를 순환하며 각 모니터 작업영역 기준으로 계단식 배치 |
+| T4 | 커서를 각 모니터에 둔 상태 | 설정창·매뉴얼·번역 팝업 열기 | 커서가 있는 모니터 작업영역 중앙에 표시, 화면 밖으로 넘치지 않음 |
+| T5 | 200% 배율 / 세로 모니터 | 플로팅 창 더블클릭 미니모드, 숫자/배경 표시 | 미니 크기·숫자 위치·투명도가 정상, 복원 시 원위치 |
+| T6 | 작업표시줄이 있는 모니터 | 저장/복사 툴팁, 시작 안내 툴팁 | 툴팁이 화면 안에서 정상 표시 |
+
+회귀가 확인되면 관련 함수(`SelectArea`, `CreateClipWin`, `SCW_SortCascade`, `GetCenteredPositionOnMouseMonitor`, `GetPopupPositionNearMouse`)의 좌표 계산과 DPI 컨텍스트를 우선 검토한다.
+
+---
+
+## 12. 변경 이력
 
 | Date | Change | Updated By |
 | --- | --- | --- |
@@ -285,3 +315,11 @@ Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-
 | 2026-06-22 | 설정창과 매뉴얼 창을 커서가 있는 모니터 중앙에 배치하고 열린 매뉴얼 재호출 시 현재 모니터로 이동하도록 수정 | AI Agent |
 | 2026-06-30 | 번역 팝업창 및 매뉴얼 다이얼로그의 마지막 선택 언어 저장 및 유지 기능 추가 | AI Agent |
 | 2026-06-30 | 앱 버전 1.2.3, Windows 시작 실행을 Startup 폴더 바로가기 방식으로 변경하고 legacy Run Registry 값을 정리하도록 수정 | AI Agent |
+| 2026-07-08 | 텍스트/이미지 번역 최초 실행 전 개인정보 동의 게이트(`EnsureTranslationConsent`, `TranslateConsent`) 추가, Desktop JPG 저장 파일명 충돌 시 `_2`,`_3` 접미사로 덮어쓰기 방지(`GetUniqueFilePath`) | AI Agent |
+| 2026-07-08 | 코드 품질 개선: `ScreenClip2Win` 캡처 실패 시 null 비트맵 가드 추가, 마우스 메시지 핸들러(`OnMessage`)를 창 생성마다 재등록하던 것을 시작 시 1회 등록으로 이동, 미사용 `temp_clip.png` 정리 코드 및 `.gitignore` 항목 제거, 텍스트 번역 WinHTTP 타임아웃을 프록시/저속망 대응으로 상향(5s/5s/5s/15s) | AI Agent |
+| 2026-07-08 | 핵심 런타임 툴팁(시작 안내, 캡처 실패, 클립보드 복사, Desktop 저장, 번역 진행/실패)을 `UIText`/`BuildUIStringTable` 기반 6개 언어로 다국어화(점진 1차), `MANUAL_LANG`을 UI 언어로 겸용하고 미설정 시 시스템 로캘 기반 기본값 적용 | AI Agent |
+| 2026-07-08 | 보안/회사망 개선: GitHub 아이콘을 런타임 favicon 다운로드에서 번들 자산 로드(`PrepareBundledGithubIcon`, 컴파일 시 `FileInstall` 임베드)로 전환, BMC 자동 다운로드 기본 OFF 및 About 이미지 로드도 플래그로 게이트, 앱 임시 파일을 전용 폴더(`APP_TEMP_DIR`)로 통일 → 기본 구성에서 외부 이미지 다운로드/임시 이미지 로드 제거 | AI Agent |
+| 2026-07-08 | C1 저장 위치 선택 기능: `SaveFolder` 설정과 `GetSaveFolder`/`SetSaveFolder` 추가, 설정창 General 탭에 "Save to File" 폴더 선택(Browse) UI 추가, `SaveBitmapToDesktop`이 설정 폴더에 저장(미설정 시 Desktop), 저장 실패 툴팁 문구를 파일 저장 일반 표현으로 변경 | AI Agent |
+| 2026-07-08 | C7 멀티모니터/DPI 수동 테스트 체크리스트 섹션 추가(문서 전용), 기존 변경 이력 섹션 번호 12로 조정 | AI Agent |
+| 2026-07-08 | C5 주석 도구 확장: 화살표(방향 있는 드래그+화살촉), 번호 핀(클릭, `AnnotSeq` 자동 증가), 모자이크(드래그 영역 픽셀화로 민감정보 가리기) 추가. `DrawVectorPreview` 헬퍼, 우클릭 메뉴 항목/번호 재정렬(2~18), `MenuHandler`·`StartAnnotationMode`·`SCW_ApplyAnnotation` 확장. 매뉴얼 본문 다국어 반영은 후속(B1) 예정 | AI Agent |
+| 2026-07-10 | 앱 버전 1.3.0(EXE 1.3.0.0)으로 상향. 우클릭 메뉴 11번 라벨을 "Save to Desktop"에서 "Save to File"로 변경(`MenuHandler` 매칭 문자열 포함). README(en/ko)에 신규 주석 도구 3종, Ctrl+S 저장 폴더, 설정 저장 항목, 보안 개선(번역 동의·외부 다운로드 제거·모자이크) 반영. 앱 내 매뉴얼(`GetManualText`)은 ko/en만 갱신(주석 도구, 저장 폴더, 번역 동의) — pl/de/fr/es 본문 갱신은 사용자 결정으로 보류 | AI Agent |

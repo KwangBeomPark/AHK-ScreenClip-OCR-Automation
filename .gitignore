@@ -19,6 +19,9 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # Temporary clips or user cache
-temp_clip.png
 *.log
 *.tmp
+
+# Local AI working notes
+AGENTS.md
+AI_CODE_MAP.md

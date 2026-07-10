@@ -1,28 +1,42 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.2.3.0
+;@Ahk2Exe-SetVersion 1.3.0.0
 #Include Gdip_All.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.2.3"
+global APP_VERSION := "1.3.0"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/ClipOCR-Pro/releases"
 global GITHUB_LATEST_RELEASE_API := "https://api.github.com/repos/KwangBeomPark/ClipOCR-Pro/releases/latest"
 
 ; ── Global asset paths and initialization ──
-global bmcBtnPath := A_Temp "\ClipOCR_bmc_btn.png"
-global githubIconPath := A_Temp "\ClipOCR_github_favicon.png"
+; Keep app-owned temp files in a dedicated subfolder instead of the shared Temp root.
+global APP_TEMP_DIR := A_Temp "\ClipOCR-Pro"
+global bmcBtnPath := APP_TEMP_DIR "\bmc_btn.png"
+global githubIconPath := ""
 
-; Download the GitHub favicon in the background.
-SetTimer(DownloadGithubIcon, -100)
-DownloadGithubIcon() {
-    global githubIconPath
-    if !FileExist(githubIconPath) {
-        try Download("https://www.google.com/s2/favicons?domain=github.com&sz=256", githubIconPath)
+; Use the bundled GitHub icon asset instead of downloading one at runtime.
+githubIconPath := PrepareBundledGithubIcon()
+
+PrepareBundledGithubIcon() {
+    global APP_TEMP_DIR
+    ; Source run: load directly from the repository assets folder when available.
+    sourceAsset := A_ScriptDir "\..\assets\github_icon.png"
+    if (!A_IsCompiled && FileExist(sourceAsset))
+        return sourceAsset
+    ; Compiled run (or missing source): extract the embedded copy into the app temp folder.
+    ; Overwriting every launch guarantees the loaded file is always our trusted asset.
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        FileInstall("..\assets\github_icon.png", APP_TEMP_DIR "\github_icon.png", 1)
+        if FileExist(APP_TEMP_DIR "\github_icon.png")
+            return APP_TEMP_DIR "\github_icon.png"
     }
+    return ""
 }
 
 ; ── Per-Monitor DPI Aware V2: fixes scaling mismatches across monitors ──
@@ -39,7 +53,6 @@ OnExit AppCleanup
 AppCleanup(*) {
     global pToken, TEMP_FILES
     try Gdip_Shutdown(pToken)
-    try FileDelete(A_Temp "\temp_clip.png")
     try {
         for _, filePath in TEMP_FILES {
             if FileExist(filePath)
@@ -69,7 +82,9 @@ global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
 global TEXT_TRANSLATE_FONT_SIZE := 10
 global IMAGE_TRANSLATE_LANGS := "ko,en,pl"
-global MANUAL_LANG := "en"
+global MANUAL_LANG := GetDefaultUILang() ; Also used as the general UI language for core tooltips
+global TRANSLATE_CONSENT := false ; One-time consent before sending data to external translation services
+global SAVE_FOLDER := "" ; Ctrl+S save destination; empty means Desktop (backward compatible)
 
 ; ── Runtime state ──
 global TRAY_TEXT_TRANSLATE_ITEM := ""
@@ -80,7 +95,7 @@ global ANNOTATION_MODE := ""
 global ANNOTATION_TARGET_HWND := 0
 global TEXT_SOURCE_LAST_HWND := 0
 global TEMP_FILES := []
-global ENABLE_BMC_AUTO_DOWNLOAD := true
+global ENABLE_BMC_AUTO_DOWNLOAD := false
 global MAIL_SIZE_CHECK_RUNNING := false
 global UPDATE_CHECK_STATE := { status: "idle", latestVersion: "", releaseUrl: GITHUB_RELEASES_URL,
     request: 0, startedTick: 0, statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
@@ -131,7 +146,21 @@ try {
     if (savedManualLang == "ko" || savedManualLang == "en" || savedManualLang == "pl" || savedManualLang == "de" || savedManualLang == "fr" || savedManualLang == "es")
         MANUAL_LANG := savedManualLang
 } catch {
-    MANUAL_LANG := "en"
+    MANUAL_LANG := GetDefaultUILang()
+}
+
+try {
+    TRANSLATE_CONSENT := (Trim(String(RegRead(REG_PATH, "TranslateConsent"))) == "1")
+} catch {
+    TRANSLATE_CONSENT := false
+}
+
+try {
+    savedFolder := Trim(String(RegRead(REG_PATH, "SaveFolder")))
+    if (savedFolder != "" && DirExist(savedFolder))
+        SAVE_FOLDER := savedFolder
+} catch {
+    SAVE_FOLDER := ""
 }
 
 ; ── System tray icon and menu customization ──
@@ -173,9 +202,11 @@ if ENABLE_BMC_AUTO_DOWNLOAD
     SetTimer(DownloadBmcButton, -100)
 
 DownloadBmcButton() {
-    global bmcBtnPath
+    global bmcBtnPath, APP_TEMP_DIR
     if !FileExist(bmcBtnPath) {
         try {
+            if !DirExist(APP_TEMP_DIR)
+                DirCreate(APP_TEMP_DIR)
             Download("https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png", bmcBtnPath)
         }
     }
@@ -225,16 +256,19 @@ ClipMenu.Add() ; Separator
 ClipMenu.Add("🟥 2. Red Box (Shift+Drag)", MenuHandler)
 ClipMenu.Add("🟨 3. Yellow Highlight (Ctrl+Drag)", MenuHandler)
 ClipMenu.Add("🟩 4. Green Highlight (Alt+Drag)", MenuHandler)
-ClipMenu.Add("✍️ 5. Text Markup (Shift+Ctrl+Click)", MenuHandler)
-ClipMenu.Add("↩️ 6. Undo Draw (Ctrl+Z)", MenuHandler)
+ClipMenu.Add("➡️ 5. Arrow (Drag)", MenuHandler)
+ClipMenu.Add("🔢 6. Number Pin (Click)", MenuHandler)
+ClipMenu.Add("🌫️ 7. Mosaic (Drag)", MenuHandler)
+ClipMenu.Add("✍️ 8. Text Markup (Shift+Ctrl+Click)", MenuHandler)
+ClipMenu.Add("↩️ 9. Undo Draw (Ctrl+Z)", MenuHandler)
 ClipMenu.Add() ; Separator
 
-ClipMenu.Add("📋 7. Copy to Clipboard (Ctrl+C)", MenuHandler)
-ClipMenu.Add("💾 8. Save to Desktop (Ctrl+S)", MenuHandler)
-ClipMenu.Add("🎨 9. Copy To Paint", MenuHandler)
+ClipMenu.Add("📋 10. Copy to Clipboard (Ctrl+C)", MenuHandler)
+ClipMenu.Add("💾 11. Save to File (Ctrl+S)", MenuHandler)
+ClipMenu.Add("🎨 12. Copy To Paint", MenuHandler)
 ClipMenu.Add() ; Separator
 
-; 10. Clipboard width submenu
+; 13. Clipboard width submenu
 WidthMenu := Menu()
 WidthMenu.Add("Original Size (Ctrl+0)", (*) => SetClipWidth(0))
 WidthMenu.Add()
@@ -247,20 +281,25 @@ WidthMenu.Add("1400 px (Ctrl+6)", (*) => SetClipWidth(1400))
 WidthMenu.Add("1600 px (Ctrl+7)", (*) => SetClipWidth(1600))
 UpdateWidthMenu()
 
-ClipMenu.Add("⚙️ 10. Clipboard Width", WidthMenu)
+ClipMenu.Add("⚙️ 13. Clipboard Width", WidthMenu)
 ClipMenu.Add() ; Separator
-ClipMenu.Add("📐 11. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
-ClipMenu.Add("🔽 12. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
-ClipMenu.Add("🔼 13. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
-ClipMenu.Add("❌ 14. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
-ClipMenu.Add("⚙️ 15. Preferences & About", (*) => ShowDashboardDialog())
+ClipMenu.Add("📐 14. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
+ClipMenu.Add("🔽 15. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
+ClipMenu.Add("🔼 16. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
+ClipMenu.Add("❌ 17. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
+ClipMenu.Add("⚙️ 18. Preferences & About", (*) => ShowDashboardDialog())
 
 ; ── Startup welcome tooltip ──
-ToolTip("📸 " APP_NAME " Ready!`r`nWin+드래그: 캡처`r`n" GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY) ": 선택 텍스트 번역")
+ToolTip(UIText("startup_ready", Map("app", APP_NAME, "hotkey", GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY))))
 SetTimer(() => ToolTip(), -4000)
 
 SetTimer(TrackLastTextSourceWindow, 250)
 ApplyTextTranslateHotkey()
+
+; ── Register capture-window mouse message handlers once (they dispatch by hwnd) ──
+OnMessage(0x0201, WM_LBUTTONDOWN)     ; WM_LBUTTONDOWN
+OnMessage(0x0203, WM_LBUTTONDOWN)     ; WM_LBUTTONDBLCLK (double click)
+OnMessage(0x0204, WM_RBUTTONDOWN)     ; WM_RBUTTONDOWN (right click)
 
 ; Hotkeys
 #LButton:: ScreenClip2Win(1)  ; Win+LButton -> floating clip + auto copy to clipboard
@@ -298,6 +337,11 @@ ScreenClip2Win(clipToClipboard := 0) {
         return
 
     pBitmap := Gdip_BitmapFromScreen(Area.X "|" Area.Y "|" Area.W "|" Area.H)
+    if !pBitmap {
+        ToolTip(UIText("capture_failed"))
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
 
     hwnd := CreateClipWin(pBitmap, Area.X, Area.Y)
 
@@ -547,6 +591,39 @@ ShowMailSizeTooltip(message, durationMs := 5000) {
     SetTimer(() => ToolTip(), -durationMs)
 }
 
+; Returns a non-existing file path, appending _2, _3 ... on collision to avoid silent overwrite.
+GetUniqueFilePath(dir, baseName, ext) {
+    candidate := dir "\" baseName "." ext
+    if !FileExist(candidate)
+        return candidate
+    index := 2
+    loop {
+        candidate := dir "\" baseName "_" index "." ext
+        if !FileExist(candidate)
+            return candidate
+        index++
+    }
+}
+
+; ── Ctrl+S save destination (falls back to Desktop when unset or missing) ──
+GetSaveFolder() {
+    global SAVE_FOLDER
+    if (SAVE_FOLDER != "" && DirExist(SAVE_FOLDER))
+        return SAVE_FOLDER
+    return A_Desktop
+}
+
+SetSaveFolder(folder) {
+    global SAVE_FOLDER, REG_PATH
+    folder := Trim(String(folder))
+    ; Store the Desktop path as empty so the default keeps following the user's Desktop.
+    if (folder == "" || folder == A_Desktop)
+        SAVE_FOLDER := ""
+    else
+        SAVE_FOLDER := folder
+    return SafeRegWriteString(SAVE_FOLDER, REG_PATH, "SaveFolder")
+}
+
 SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
     if (!pBitmap || filePath == "")
         return false
@@ -617,18 +694,121 @@ ShortErrorMessage(message, maxLen := 120) {
     return message
 }
 
+; ── UI localization ──
+; Core runtime tooltips follow the Manual language preference (MANUAL_LANG).
+; This is an incremental pass: only high-frequency messages are localized here.
+GetDefaultUILang() {
+    ; Derive a sensible default UI language from the Windows UI locale.
+    switch A_Language {
+        case "0412": return "ko"
+        case "0415": return "pl"
+        case "0407", "0807", "0c07": return "de"
+        case "040c", "080c", "0c0c", "100c": return "fr"
+        case "040a", "080a", "0c0a": return "es"
+        default: return "en"
+    }
+}
+
+GetUILang() {
+    global MANUAL_LANG
+    return MANUAL_LANG
+}
+
+UIText(key, replacements := 0) {
+    static table := BuildUIStringTable()
+    if !table.Has(key)
+        return key
+    entry := table[key]
+    lang := GetUILang()
+    text := entry.Has(lang) ? entry[lang] : entry["en"]
+    if IsObject(replacements) {
+        for name, value in replacements
+            text := StrReplace(text, "{" name "}", String(value))
+    }
+    return text
+}
+
+BuildUIStringTable() {
+    t := Map()
+    t["startup_ready"] := Map(
+        "ko", "📸 {app} 준비 완료!`r`nWin+드래그: 캡처`r`n{hotkey}: 선택 텍스트 번역",
+        "en", "📸 {app} Ready!`r`nWin+Drag: Capture`r`n{hotkey}: Translate selected text",
+        "pl", "📸 {app} gotowe!`r`nWin+przeciągnij: przechwyć`r`n{hotkey}: przetłumacz zaznaczony tekst",
+        "de", "📸 {app} bereit!`r`nWin+Ziehen: Aufnahme`r`n{hotkey}: markierten Text übersetzen",
+        "fr", "📸 {app} prêt !`r`nWin+glisser : capturer`r`n{hotkey} : traduire le texte sélectionné",
+        "es", "📸 {app} listo!`r`nWin+arrastrar: capturar`r`n{hotkey}: traducir texto seleccionado")
+    t["capture_failed"] := Map(
+        "ko", "⚠️ 화면 캡처에 실패했습니다.",
+        "en", "⚠️ Screen capture failed.",
+        "pl", "⚠️ Przechwytywanie ekranu nie powiodło się.",
+        "de", "⚠️ Bildschirmaufnahme fehlgeschlagen.",
+        "fr", "⚠️ Échec de la capture d'écran.",
+        "es", "⚠️ Error en la captura de pantalla.")
+    t["copy_ok"] := Map(
+        "ko", "✅ 클립보드 복사 완료: {w}×{h}`r`nJPG 예상 {size} (품질 {quality}) | Outline {outline}",
+        "en", "✅ Copied to clipboard: {w}×{h}`r`nEst. JPG {size} (quality {quality}) | Outline {outline}",
+        "pl", "✅ Skopiowano do schowka: {w}×{h}`r`nSzac. JPG {size} (jakość {quality}) | Kontur {outline}",
+        "de", "✅ In Zwischenablage kopiert: {w}×{h}`r`nGesch. JPG {size} (Qualität {quality}) | Kontur {outline}",
+        "fr", "✅ Copié dans le presse-papiers : {w}×{h}`r`nJPG est. {size} (qualité {quality}) | Contour {outline}",
+        "es", "✅ Copiado al portapapeles: {w}×{h}`r`nJPG est. {size} (calidad {quality}) | Contorno {outline}")
+    t["copy_savewarn"] := Map(
+        "ko", "`r`n⚠️ 가로폭 설정을 Registry에 저장하지 못했습니다.",
+        "en", "`r`n⚠️ Could not save the width setting to the Registry.",
+        "pl", "`r`n⚠️ Nie udało się zapisać ustawienia szerokości w rejestrze.",
+        "de", "`r`n⚠️ Breiteneinstellung konnte nicht in der Registry gespeichert werden.",
+        "fr", "`r`n⚠️ Impossible d'enregistrer le réglage de largeur dans le Registre.",
+        "es", "`r`n⚠️ No se pudo guardar el ajuste de ancho en el Registro.")
+    t["size_unknown"] := Map(
+        "ko", "확인 불가", "en", "unknown", "pl", "nieznany",
+        "de", "unbekannt", "fr", "inconnu", "es", "desconocido")
+    t["copy_failed"] := Map(
+        "ko", "⚠️ 클립보드 복사 실패: {error}",
+        "en", "⚠️ Copy to clipboard failed: {error}",
+        "pl", "⚠️ Kopiowanie do schowka nie powiodło się: {error}",
+        "de", "⚠️ Kopieren in die Zwischenablage fehlgeschlagen: {error}",
+        "fr", "⚠️ Échec de la copie dans le presse-papiers : {error}",
+        "es", "⚠️ Error al copiar al portapapeles: {error}")
+    t["save_ok"] := Map(
+        "ko", "✅ JPG 저장 완료: {w}×{h} | {size}`r`n{path}",
+        "en", "✅ JPG saved: {w}×{h} | {size}`r`n{path}",
+        "pl", "✅ Zapisano JPG: {w}×{h} | {size}`r`n{path}",
+        "de", "✅ JPG gespeichert: {w}×{h} | {size}`r`n{path}",
+        "fr", "✅ JPG enregistré : {w}×{h} | {size}`r`n{path}",
+        "es", "✅ JPG guardado: {w}×{h} | {size}`r`n{path}")
+    t["save_failed"] := Map(
+        "ko", "⚠️ 파일 저장 실패: {error}",
+        "en", "⚠️ File save failed: {error}",
+        "pl", "⚠️ Zapis pliku nie powiódł się: {error}",
+        "de", "⚠️ Speichern der Datei fehlgeschlagen: {error}",
+        "fr", "⚠️ Échec de l'enregistrement du fichier : {error}",
+        "es", "⚠️ Error al guardar el archivo: {error}")
+    t["translating"] := Map(
+        "ko", "🌐 번역 중...", "en", "🌐 Translating...", "pl", "🌐 Tłumaczenie...",
+        "de", "🌐 Übersetze...", "fr", "🌐 Traduction...", "es", "🌐 Traduciendo...")
+    t["translate_failed"] := Map(
+        "ko", "❌ 번역 실패: {error}",
+        "en", "❌ Translation failed: {error}",
+        "pl", "❌ Tłumaczenie nie powiodło się: {error}",
+        "de", "❌ Übersetzung fehlgeschlagen: {error}",
+        "fr", "❌ Échec de la traduction : {error}",
+        "es", "❌ Error de traducción: {error}")
+    return t
+}
+
 /**
  * 선택한 화면 영역을 Google 이미지 번역 페이지로 보냅니다.
  * Sends a selected screen area to Google Translate Image.
  * @returns {None}
  */
 ScreenClip2GoogleImage() {
+    if !EnsureTranslationConsent()
+        return
     Area := SelectArea()
     if (Area.W < 10 || Area.H < 10)
         return
     pBitmap := Gdip_BitmapFromScreen(Area.X "|" Area.Y "|" Area.W "|" Area.H)
     if !pBitmap {
-        ToolTip("⚠️ 화면 캡처에 실패했습니다.`r`n⚠️ Screen capture failed.")
+        ToolTip(UIText("capture_failed"))
         SetTimer(() => ToolTip(), -3000)
         return
     }
@@ -667,6 +847,8 @@ GoogleImageTranslate(targetLang) {
         return
     if !IsTextTranslateLangSupported(targetLang)
         targetLang := "ko"
+    if !EnsureTranslationConsent()
+        return
 
     clipBackup := SafeClipboardBackup()
     if !clipBackup.ok {
@@ -822,9 +1004,37 @@ GetCopySourceHwnd(fromTray := false) {
     return IsTextSourceWindow(activeHwnd) ? activeHwnd : 0
 }
 
+/**
+ * 외부 번역 서비스로 데이터를 전송하기 전에 최초 1회 개인정보 동의를 확인하는 함수
+ * Shows a one-time privacy notice before any translation feature sends data to Google.
+ * @returns {Integer} 사용자가 동의(또는 이전에 동의)했으면 true, 취소하면 false / True if consented
+ */
+EnsureTranslationConsent() {
+    global TRANSLATE_CONSENT, REG_PATH, APP_NAME
+    if TRANSLATE_CONSENT
+        return true
+
+    message := "번역 기능은 선택한 텍스트 또는 캡처 이미지를 외부 서비스(Google 번역)로 전송합니다.`r`n"
+        . "계좌번호, 급여, 비밀번호, 개인정보, 내부 시스템 화면 등 민감정보가 포함되지 않았는지 먼저 확인하세요.`r`n`r`n"
+        . "This feature sends the selected text or captured image to an external service (Google Translate).`r`n"
+        . "Make sure it contains no sensitive data such as account numbers, salaries, passwords, or internal screens.`r`n`r`n"
+        . "번역을 계속 사용하시겠습니까?  /  Continue using translation?"
+
+    ; YesNo + warning icon + MB_TOPMOST (0x40000) so the notice is not hidden behind always-on-top windows.
+    result := MsgBox(message, APP_NAME " - 번역 개인정보 안내 / Translation Privacy Notice", "YesNo Icon! 0x40000")
+    if (result != "Yes")
+        return false
+
+    TRANSLATE_CONSENT := true
+    SafeRegWriteString(1, REG_PATH, "TranslateConsent")
+    return true
+}
+
 TranslateSelectedText(fromTray := false) {
     global TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_MAX_CHARS
     sourceHwnd := GetCopySourceHwnd(fromTray)
+    if !EnsureTranslationConsent()
+        return
     clipSaved := SafeClipboardBackup()
     if !clipSaved.ok {
         ToolTip("⚠️ 클립보드를 백업하지 못했습니다.`r`n⚠️ Could not back up clipboard.")
@@ -866,12 +1076,12 @@ TranslateSelectedText(fromTray := false) {
             return
         }
 
-        ToolTip("🌐 번역 중...`r`n🌐 Translating...")
+        ToolTip(UIText("translating"))
         translatedText := TranslateTextViaGoogle(sourceText, TEXT_TRANSLATE_LANG)
         ToolTip()
         ShowTextTranslationPopup(sourceText, translatedText)
     } catch as e {
-        ToolTip("❌ 번역 실패: " ShortErrorMessage(e.Message) "`r`n❌ Translation failed.")
+        ToolTip(UIText("translate_failed", Map("error", ShortErrorMessage(e.Message))))
         SetTimer(() => ToolTip(), -3500)
     } finally {
         SafeClipboardRestore(clipSaved)
@@ -892,7 +1102,8 @@ TranslateTextViaGoogle(text, targetLang) {
 
     http := ComObject("WinHttp.WinHttpRequest.5.1")
     http.Open("GET", url, false)
-    http.SetTimeouts(1200, 1200, 1200, 3000)
+    ; (resolve, connect, send, receive) in ms — tolerant of corporate proxies and slow links.
+    http.SetTimeouts(5000, 5000, 5000, 15000)
     http.SetRequestHeader("User-Agent", "Mozilla/5.0")
     http.Send()
 
@@ -1253,6 +1464,29 @@ DrawRectPreview(bgColor, hasBorder := true) {
     return { x: x, y: y, w: w, h: h }
 }
 
+; Rubber-band preview that also preserves drag direction (start -> end) for arrows.
+DrawVectorPreview(bgColor := "Red") {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&sx, &sy)
+    PreviewGui := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale +Border")
+    WinSetTransparent(120, PreviewGui.Hwnd)
+    PreviewGui.BackColor := bgColor
+
+    ex := sx, ey := sy
+    loop {
+        if !GetKeyState("LButton", "P")
+            break
+        Sleep(10)
+        MouseGetPos(&ex, &ey)
+        x := Min(sx, ex), y := Min(sy, ey)
+        w := Abs(sx - ex), h := Abs(sy - ey)
+        if (w > 0 && h > 0)
+            PreviewGui.Show("x" x " y" y " w" w " h" h " NA")
+    }
+    PreviewGui.Destroy()
+    return { x1: sx, y1: sy, x2: ex, y2: ey }
+}
+
 /**
  * 플로팅 캡처 창 GUI를 생성하고 화면에 표시하는 함수
  * Creates and displays the borderless floating clipping window GUI.
@@ -1312,12 +1546,9 @@ CreateClipWin(pBitmap, x, y) {
     hwnd := ClipGui.Hwnd
     ClipWins[hwnd] := { pBitmap: pBitmap, w: W, h: H, gui: ClipGui, IsMinimized: false, id: assignedId, NumText: NumText,
         NumBg: NumBg,
-        picCtrl: Pic, UndoStack: [], orgX: x - WINDOW_BORDER_WIDTH, orgY: y - WINDOW_BORDER_WIDTH }
+        picCtrl: Pic, UndoStack: [], AnnotSeq: 1, orgX: x - WINDOW_BORDER_WIDTH, orgY: y - WINDOW_BORDER_WIDTH }
 
-    ; Setup dragging
-    OnMessage(0x0201, WM_LBUTTONDOWN)
-    OnMessage(0x0203, WM_LBUTTONDOWN) ; Handle double click message
-    OnMessage(0x0204, WM_RBUTTONDOWN) ; Handle right click message
+    ; Mouse message handlers (WM_LBUTTONDOWN/DBLCLK/RBUTTONDOWN) are registered once at startup.
 
     ClipGui.OnEvent("Close", (*) => CloseClipWin(ClipGui))
 
@@ -1442,17 +1673,32 @@ SCW_ApplyAnnotation(hwnd, mode) {
             return
         textVal := ib.Value
     }
+    else if (mode == "Number") {
+        ; Click-based like Text, but stamps an auto-incrementing numbered pin.
+        CoordMode("Mouse", "Screen")
+        MouseGetPos(&clickX, &clickY)
+    }
     else if (mode == "Red")
         rect := DrawRectPreview("Red")
     else if (mode == "Yellow")
         rect := DrawRectPreview("Yellow", false)
     else if (mode == "Green")
         rect := DrawRectPreview("Lime", false)
+    else if (mode == "Mosaic")
+        rect := DrawRectPreview("Gray")
+    else if (mode == "Arrow")
+        vec := DrawVectorPreview("Red")
     else
         return
 
-    if (mode != "Text" && (rect.w <= 0 || rect.h <= 0))
+    isRectMode := (mode == "Red" || mode == "Yellow" || mode == "Green" || mode == "Mosaic")
+    if (isRectMode && (rect.w <= 0 || rect.h <= 0))
         return
+    if (mode == "Arrow") {
+        vdx := vec.x2 - vec.x1, vdy := vec.y2 - vec.y1
+        if (Sqrt(vdx * vdx + vdy * vdy) < 6)
+            return
+    }
 
     clone := 0, pGraphics := 0, pPen := 0, pBrush := 0, hBitmap := 0
     try {
@@ -1460,13 +1706,14 @@ SCW_ApplyAnnotation(hwnd, mode) {
         if !clone
             throw Error("Could not create undo image")
 
-        if (mode == "Text") {
+        if (mode == "Text" || mode == "Number") {
             rectX := clickX - (winX + WINDOW_BORDER_WIDTH)
             rectY := clickY - (winY + WINDOW_BORDER_WIDTH)
-        } else {
+        } else if (isRectMode) {
             rectX := rect.x - (winX + WINDOW_BORDER_WIDTH)
             rectY := rect.y - (winY + WINDOW_BORDER_WIDTH)
         }
+        ; Arrow computes its own endpoint coordinates in the drawing branch below.
 
         pGraphics := Gdip_GraphicsFromImage(winInfo.pBitmap)
         if !pGraphics
@@ -1491,6 +1738,67 @@ SCW_ApplyAnnotation(hwnd, mode) {
             if !pBrush
                 throw Error("Could not create brush")
             Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
+        } else if (mode == "Number") {
+            radius := 15
+            fontSize := 13
+            pBrush := Gdip_BrushCreateSolid("0xFFFF0000")
+            if !pBrush
+                throw Error("Could not create brush")
+            Gdip_FillEllipse(pGraphics, pBrush, rectX - radius, rectY - radius, radius * 2, radius * 2)
+            seq := winInfo.AnnotSeq
+            status := Gdip_TextToGraphics(pGraphics, String(seq), "x" (rectX - radius) " y" (rectY - radius) " cFFFFFFFF s" fontSize " Bold Center vCenter", "Arial", radius * 2, radius * 2)
+            if (status < 0)
+                throw Error("Gdip_TextToGraphics failed with status " status)
+            winInfo.AnnotSeq := seq + 1
+        } else if (mode == "Mosaic") {
+            ; Clamp the region to the image bounds before pixelating.
+            rx := Max(0, rectX)
+            ry := Max(0, rectY)
+            rRight := Min(winInfo.w, rectX + rect.w)
+            rBottom := Min(winInfo.h, rectY + rect.h)
+            rw := rRight - rx
+            rh := rBottom - ry
+            if (rw >= 1 && rh >= 1) {
+                region := Gdip_CloneBitmapArea(winInfo.pBitmap, rx, ry, rw, rh)
+                if region {
+                    blockSize := 10
+                    smallW := Max(1, rw // blockSize)
+                    smallH := Max(1, rh // blockSize)
+                    small := Gdip_CreateBitmap(smallW, smallH)
+                    if small {
+                        gSmall := Gdip_GraphicsFromImage(small)
+                        Gdip_SetInterpolationMode(gSmall, 7) ; average colors while downscaling
+                        Gdip_DrawImage(gSmall, region, 0, 0, smallW, smallH, 0, 0, rw, rh)
+                        Gdip_DeleteGraphics(gSmall)
+                        Gdip_SetInterpolationMode(pGraphics, 5) ; NearestNeighbor -> blocky mosaic
+                        Gdip_SetCompositingMode(pGraphics, 1)   ; SourceCopy -> replace pixels
+                        Gdip_DrawImage(pGraphics, small, rx, ry, rw, rh, 0, 0, smallW, smallH)
+                        Gdip_DisposeImage(small)
+                    }
+                    Gdip_DisposeImage(region)
+                }
+            }
+        } else if (mode == "Arrow") {
+            pPen := Gdip_CreatePen("0xFFFF0000", ANNOTATION_BORDER_WIDTH)
+            if !pPen
+                throw Error("Could not create pen")
+            ax1 := vec.x1 - (winX + WINDOW_BORDER_WIDTH)
+            ay1 := vec.y1 - (winY + WINDOW_BORDER_WIDTH)
+            ax2 := vec.x2 - (winX + WINDOW_BORDER_WIDTH)
+            ay2 := vec.y2 - (winY + WINDOW_BORDER_WIDTH)
+            Gdip_DrawLine(pGraphics, pPen, ax1, ay1, ax2, ay2)
+            ; Arrowhead: two short lines drawn back from the tip.
+            adx := ax2 - ax1, ady := ay2 - ay1
+            alen := Sqrt(adx * adx + ady * ady)
+            if (alen > 0) {
+                ux := adx / alen, uy := ady / alen
+                headLen := Max(12, ANNOTATION_BORDER_WIDTH * 5)
+                headW := headLen * 0.6
+                bx := ax2 - ux * headLen, by := ay2 - uy * headLen
+                perpX := -uy, perpY := ux
+                Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx + perpX * headW, by + perpY * headW)
+                Gdip_DrawLine(pGraphics, pPen, ax2, ay2, bx - perpX * headW, by - perpY * headW)
+            }
         }
 
         hBitmap := Gdip_CreateHBITMAPFromBitmap(winInfo.pBitmap)
@@ -1529,8 +1837,8 @@ StartAnnotationMode(mode) {
     ANNOTATION_MODE := mode
     ANNOTATION_TARGET_HWND := RightClickedHwnd
     WinActivate("ahk_id " ANNOTATION_TARGET_HWND)
-    if (mode == "Text")
-        ToolTip("✍️ 주석을 추가할 위치를 마우스로 클릭하세요.`r`n✍️ Click on the clip to add text.")
+    if (mode == "Text" || mode == "Number")
+        ToolTip("✍️ 주석을 추가할 위치를 마우스로 클릭하세요.`r`n✍️ Click on the clip to place it.")
     else
         ToolTip("📝 마우스로 영역을 드래그하세요.`r`n📝 Drag an area on the clip.")
     SetTimer(ClearAnnotationMode, 0)
@@ -1584,14 +1892,13 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
         finalW := Gdip_GetImageWidth(pOutput)
         finalH := Gdip_GetImageHeight(pOutput)
         jpegBytes := GetEstimatedJpegSize(pOutput, JPG_QUALITY)
-        sizeText := jpegBytes >= 0 ? Format("{:.2f} MB", jpegBytes / 1048576) : "확인 불가"
+        sizeText := jpegBytes >= 0 ? Format("{:.2f} MB", jpegBytes / 1048576) : UIText("size_unknown")
         outlineText := COPY_OUTLINE_ENABLED ? "ON" : "OFF"
-        saveWarning := settingsSaved ? "" : "`r`n⚠️ 가로폭 설정을 Registry에 저장하지 못했습니다."
-        ToolTip("✅ 클립보드 복사 완료: " finalW "×" finalH
-            "`r`nJPG 예상 " sizeText " (품질 " JPG_QUALITY ") | Outline " outlineText saveWarning)
+        saveWarning := settingsSaved ? "" : UIText("copy_savewarn")
+        ToolTip(UIText("copy_ok", Map("w", finalW, "h", finalH, "size", sizeText, "quality", JPG_QUALITY, "outline", outlineText)) saveWarning)
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
-        ToolTip("⚠️ 클립보드 복사 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Copy to clipboard failed.")
+        ToolTip(UIText("copy_failed", Map("error", ShortErrorMessage(e.Message))))
         SetTimer(() => ToolTip(), -3500)
     } finally {
         if pOutput
@@ -1609,17 +1916,16 @@ SaveBitmapToDesktop(pBitmap) {
         if !pOutput
             throw Error("Could not prepare image")
         TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
-        FileOut := A_Desktop "\" TodayDate ".jpg"
+        FileOut := GetUniqueFilePath(GetSaveFolder(), TodayDate, "jpg")
         if !SafeSaveBitmapToFile(pOutput, FileOut, JPG_QUALITY)
             throw Error("Could not save JPG file")
         finalW := Gdip_GetImageWidth(pOutput)
         finalH := Gdip_GetImageHeight(pOutput)
         fileBytes := FileGetSize(FileOut)
-        ToolTip("✅ JPG 저장 완료: " finalW "×" finalH " | " Format("{:.2f} MB", fileBytes / 1048576)
-            "`r`n" FileOut)
+        ToolTip(UIText("save_ok", Map("w", finalW, "h", finalH, "size", Format("{:.2f} MB", fileBytes / 1048576), "path", FileOut)))
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
-        ToolTip("⚠️ 바탕화면 저장 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Save to Desktop failed.")
+        ToolTip(UIText("save_failed", Map("error", ShortErrorMessage(e.Message))))
         SetTimer(() => ToolTip(), -3500)
     } finally {
         if pOutput
@@ -1677,9 +1983,9 @@ WM_RBUTTONDOWN(wParam, lParam, msg, hwnd) {
     global RightClickedHwnd := hwnd
 
     if (ClipWins[hwnd].UndoStack.Length > 0)
-        ClipMenu.Enable("↩️ 6. Undo Draw (Ctrl+Z)")
+        ClipMenu.Enable("↩️ 9. Undo Draw (Ctrl+Z)")
     else
-        ClipMenu.Disable("↩️ 6. Undo Draw (Ctrl+Z)")
+        ClipMenu.Disable("↩️ 9. Undo Draw (Ctrl+Z)")
 
     ClipMenu.Show()
 }
@@ -1700,13 +2006,22 @@ MenuHandler(ItemName, ItemPos, MyMenu) {
     else if InStr(ItemName, "Green Highlight") {
         StartAnnotationMode("Green")
     }
+    else if InStr(ItemName, "Arrow") {
+        StartAnnotationMode("Arrow")
+    }
+    else if InStr(ItemName, "Number Pin") {
+        StartAnnotationMode("Number")
+    }
+    else if InStr(ItemName, "Mosaic") {
+        StartAnnotationMode("Mosaic")
+    }
     else if InStr(ItemName, "Text Markup") {
         StartAnnotationMode("Text")
     }
     else if InStr(ItemName, "Copy To Paint") {
         CopyBitmapToPaint(pBitmap)
     }
-    else if InStr(ItemName, "Save to Desktop") {
+    else if InStr(ItemName, "Save to File") {
         SaveBitmapToDesktop(pBitmap)
     }
     else if InStr(ItemName, "Copy to Clipboard") {
@@ -2243,9 +2558,12 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs) {
+SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     settingsSaved := true
+
+    if !SetSaveFolder(SaveFolderEdit.Value)
+        settingsSaved := false
 
     if StartupChk.Value {
         if !EnableStartup()
@@ -2288,7 +2606,7 @@ SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCo
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -2368,6 +2686,24 @@ ShowDashboardDialog() {
     StartupChk.SetFont("s10 Bold", "Segoe UI")
     GenPanel.Push(StartupChk)
     GenPanel.Push(DashGui.Add("Text", "x198 y339 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
+
+    ; Save location (Ctrl+S destination)
+    GenPanel.Push(DashGui.Add("Text", "x180 y372 w580 h1 Background3F3F46", ""))
+    lblSave := DashGui.Add("Text", "x180 y384 w580 h22 +BackgroundTrans cFFFFFF", "Save to File (Ctrl+S)")
+    lblSave.SetFont("s10 Bold")
+    GenPanel.Push(lblSave)
+    GenPanel.Push(DashGui.Add("Text", "x180 y414 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
+    SaveFolderEdit := DashGui.Add("Edit", "x295 y410 w305 h24 ReadOnly", GetSaveFolder())
+    GenPanel.Push(SaveFolderEdit)
+    BrowseSaveBtn := DashGui.Add("Button", "x610 y409 w150 h26", "📁 Browse…")
+    GenPanel.Push(BrowseSaveBtn)
+
+    BrowseSaveFolder(*) {
+        selected := DirSelect("*" GetSaveFolder(), 3, "Choose a folder to save captured images")
+        if (selected != "")
+            SaveFolderEdit.Value := selected
+    }
+    BrowseSaveBtn.OnEvent("Click", BrowseSaveFolder)
 
     ; 2. Translation Panel
     TrnPanel := []
@@ -2511,7 +2847,7 @@ ShowDashboardDialog() {
     AbtPanel.Push(DashGui.Add("Text", "x195 y326 w550 h20 +BackgroundTrans cFFDD00", "☕ Support This Project"))
     AbtPanel.Push(DashGui.Add("Text", "x195 y350 w550 h28 +BackgroundTrans cE0E0E0", "If this tool helps reduce repetitive work, your support will encourage me to continue building more tools."))
 
-    if FileExist(bmcBtnPath) {
+    if (ENABLE_BMC_AUTO_DOWNLOAD && FileExist(bmcBtnPath)) {
         BmcPic := DashGui.Add("Picture", "x382 y378 w176 h36 +BackgroundTrans", bmcBtnPath)
         BmcPic.OnEvent("Click", (*) => Run("https://www.buymeacoffee.com/KBPark_Bob"))
         AbtPanel.Push(BmcPic)
@@ -2541,7 +2877,7 @@ ShowDashboardDialog() {
     CancelBtn := DashGui.Add("Button", "x660 y455 w100 h32", "Cancel")
 
     SaveAllSettings(*) {
-        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs)
+        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit)
         if settingsSaved
             ToolTip("✅ All settings saved.")
         else
@@ -2826,6 +3162,7 @@ GetManualText(lang) {
                - 번역할 텍스트를 선택한 후 Win + CapsLock을 누릅니다.
                - 번역 결과 창에서 언어 콤보박스로 EN, KO, PL 등 원하는 언어로 전환 가능합니다.
                - Settings에서 단축키와 기본 번역 언어를 변경할 수 있습니다.
+               - 최초 사용 시 외부 서비스(Google 번역) 전송에 대한 동의 안내가 1회 표시됩니다.
             
             3. 📧 Outlook 웹메일 용량 추정  (Ctrl + Win + 0)
                - 작성 중인 메일 본문 안을 클릭한 상태에서 실행합니다.
@@ -2842,12 +3179,15 @@ GetManualText(lang) {
               🟥 Shift + 드래그: 빨간 테두리 박스 그리기
               🟨 Ctrl + 드래그: 노란 형광펜 하이라이트
               🟩 Alt + 드래그: 초록 형광펜 하이라이트
+              ➡️ 우클릭 메뉴 → Arrow: 드래그 방향으로 화살표 그리기
+              🔢 우클릭 메뉴 → Number Pin: 클릭 위치에 번호 핀 표시 (1, 2, 3… 자동 증가)
+              🌫️ 우클릭 메뉴 → Mosaic: 드래그 영역을 모자이크 처리 (민감정보 가리기)
               ↩️ Ctrl + Z: 그리기 실행 취소
-            
+
               📋 Ctrl + C: 클립보드에 이미지 복사
               📐 Ctrl + 0: Original Size로 설정 후 원본 크기 복사
               📐 Ctrl + 1~7: 가로 400~1600px로 설정 후 즉시 복사
-              💾 Ctrl + S: 현재 출력 설정으로 바탕화면에 JPG 저장
+              💾 Ctrl + S: 현재 출력 설정으로 저장 폴더에 JPG 저장 (기본: 바탕화면)
               Esc: 현재 캡처 창 닫기
               Ctrl + Esc: 모든 캡처 창 닫기
             
@@ -2865,6 +3205,7 @@ GetManualText(lang) {
             
             • 클립보드 이미지 크기: Original Size 또는 400~1600px
             • 복사/저장 이미지 검정 아웃라인: 켜기/끄기
+            • 저장 폴더(Ctrl+S): General 탭에서 JPG 저장 위치 선택 (기본: 바탕화면)
             • About 탭: GitHub 최신 버전 확인 및 릴리즈 페이지 열기
             • 번역 단축키: Win+CapsLock 등 5가지 옵션
             • 번역 결과 언어: 한국어, 영어, 폴란드어 등 유럽 언어 49개 지원
@@ -3136,6 +3477,7 @@ GetManualText(lang) {
            - Select text, then press Win + CapsLock.
            - In the translation window, switch target language (EN, KO, PL, etc.) via the combo box.
            - The hotkey and default language can be changed in Settings.
+           - On first use, a one-time consent notice about sending data to an external service (Google Translate) is shown.
         
         3. 📧 Estimate Outlook Web Mail Size  (Ctrl + Win + 0)
            - Click inside the message body before using the hotkey.
@@ -3152,12 +3494,15 @@ GetManualText(lang) {
           🟥 Shift + Drag: Draw a red border box
           🟨 Ctrl + Drag: Yellow highlight
           🟩 Alt + Drag: Green highlight
+          ➡️ Right-click menu → Arrow: Draw an arrow in the drag direction
+          🔢 Right-click menu → Number Pin: Stamp a numbered pin where you click (1, 2, 3… auto-increment)
+          🌫️ Right-click menu → Mosaic: Pixelate the dragged area (mask sensitive info)
           ↩️ Ctrl + Z: Undo drawing
-        
+
           📋 Ctrl + C: Copy image to clipboard
           📐 Ctrl + 0: Set Original Size and copy at original dimensions
           📐 Ctrl + 1~7: Set width to 400~1600 px and copy immediately
-          💾 Ctrl + S: Save JPG to Desktop with current output settings
+          💾 Ctrl + S: Save a JPG to the save folder with current output settings (default: Desktop)
           Esc: Close current capture window
           Ctrl + Esc: Close all capture windows
         
@@ -3175,6 +3520,7 @@ GetManualText(lang) {
         
         • Clipboard image size: Original Size or 400~1600 px width
         • Black outline for copied/saved images: On/Off
+        • Save folder (Ctrl+S): Choose the JPG save location on the General tab (default: Desktop)
         • About tab: Check GitHub updates and open the release page
         • Translation hotkey: 5 options available
         • Translation language: 49 European languages supported
