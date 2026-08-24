@@ -17,6 +17,11 @@ if ($ahkContent -match 'global APP_VERSION\s*:=\s*"([^"]+)"') {
     Write-Error "Could not find APP_VERSION in script."
 }
 
+$expectedFileVersion = "$version.0"
+if ($ahkContent -notmatch ";@Ahk2Exe-SetVersion\s+$([regex]::Escape($expectedFileVersion))(?:\s|$)") {
+    Write-Error "APP_VERSION ($version) and Ahk2Exe file version ($expectedFileVersion) are not synchronized."
+}
+
 Write-Host "=========================================="
 Write-Host " ClipOCR-Pro Auto Build and Release Pipeline"
 Write-Host " Target Version: v$version"
@@ -30,17 +35,36 @@ if ($LastExitCode -ne 0) {
 }
 Write-Host "GitHub CLI auth check succeeded."
 
+$tag = "v$version"
+$existingReleaseTags = gh release list --limit 1000 --json tagName | ConvertFrom-Json
+if ($LastExitCode -ne 0) {
+    Write-Error "Could not query existing GitHub releases."
+}
+if ($existingReleaseTags.tagName -contains $tag) {
+    Write-Error "Release $tag already exists. Bump APP_VERSION instead of replacing a published release."
+}
+
 # 4. Prepare release folder and clean old files
 $releaseDir = "release"
 if (-not (Test-Path $releaseDir)) {
     New-Item -Path $releaseDir -ItemType Directory | Out-Null
 } else {
-    # Clean up legacy App03 files and old ClipOCR-Pro versions to prevent clutter
-    Get-ChildItem $releaseDir -Filter "App03_*" | Remove-Item -Force
-    Get-ChildItem $releaseDir -Filter "ClipOCR-Pro.v*" | Remove-Item -Force
+    # Replace only artifacts for the target version; older builds may still be running.
+    $targetArtifacts = @(
+        "ClipOCR-Pro.v$version.exe",
+        "ClipOCR-Pro.v$version.zip",
+        "App03_ClipOCR-Pro_v$version.exe",
+        "App03_ClipOCR-Pro_v$version.zip"
+    )
+    foreach ($artifactName in $targetArtifacts) {
+        $artifactPath = Join-Path $releaseDir $artifactName
+        if (Test-Path -LiteralPath $artifactPath) {
+            Remove-Item -LiteralPath $artifactPath -Force
+        }
+    }
 }
 
-# 5. Compile AHK Script using CMD to guarantee synchronous execution and correct path parsing
+# 5. Compile AHK script
 $compilerPath = "C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe"
 $baseAhk = "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe"
 $iconPath = "assets\ClipOCR-Pro.ico"
@@ -58,13 +82,26 @@ $absIconPath = [System.IO.Path]::GetFullPath($iconPath)
 $absBaseAhk = [System.IO.Path]::GetFullPath($baseAhk)
 
 Write-Host "[2/6] Compiling AHK script..."
-$compileCmd = "`"$compilerPath`" /in `"$absAhkPath`" /out `"$absOutPath`" /icon `"$absIconPath`" /base `"$absBaseAhk`""
-cmd.exe /c $compileCmd
+$compileArguments = "/in `"$absAhkPath`" /out `"$absOutPath`" /icon `"$absIconPath`" /base `"$absBaseAhk`""
+$compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compileArguments -Wait -PassThru
+if ($compileProcess.ExitCode -ne 0) {
+    Write-Error "Ahk2Exe failed with exit code $($compileProcess.ExitCode)."
+}
 
 if (-not (Test-Path $outputExePath)) {
     Write-Error "Failed to generate compiled exe: $outputExePath"
 }
-Write-Host "Compilation finished: $outputExeName"
+$compiledFileVersion = (Get-Item -LiteralPath $outputExePath).VersionInfo.FileVersion
+if ($compiledFileVersion -ne $expectedFileVersion) {
+    Write-Error "Compiled EXE version ($compiledFileVersion) does not match expected version ($expectedFileVersion)."
+}
+
+$healthProcess = Start-Process -FilePath $outputExePath -ArgumentList "--health-check" -Wait -PassThru
+if ($healthProcess.ExitCode -ne 0) {
+    $healthLog = Join-Path $env:TEMP "ClipOCR-Pro\health-check.log"
+    Write-Error "Compiled EXE health check failed. See $healthLog"
+}
+Write-Host "Compilation and health check finished: $outputExeName"
 
 # 6. Compress to ZIP
 $outputZipName = "ClipOCR-Pro.v$version.zip"
@@ -87,10 +124,11 @@ Copy-Item -Path $outputExePath -Destination $app03ExePath -Force
 Copy-Item -Path $outputZipPath -Destination $app03ZipPath -Force
 Write-Host "Corporate copy files created (App03_ClipOCR-Pro_v$version.exe and App03_ClipOCR-Pro_v$version.zip)"
 
-# 8. Git Commit and Push
-Write-Host "[5/6] Committing and pushing git changes..."
-git add .
-$gitStatus = git status --porcelain
+# 8. Git commit and push only project release inputs (never stage unrelated workspace files)
+Write-Host "[5/6] Committing and pushing release inputs..."
+$releaseInputs = @("src/ClipOCR-Pro.ahk", "src/Gdip_All.ahk", "scripts/build.ps1", "README.md", "README.ko.md", "assets")
+git add -- $releaseInputs
+$gitStatus = git status --porcelain -- $releaseInputs
 if ($gitStatus) {
     git commit -m "Release v$version"
     git push origin main
@@ -99,30 +137,11 @@ if ($gitStatus) {
     Write-Host "No changes to commit."
 }
 
-# 9. GitHub Release creation and asset upload
-Write-Host "[6/6] Creating/Updating GitHub Release and uploading assets..."
-$tag = "v$version"
-
-$releaseExists = $true
-try {
-    gh release view $tag >$null 2>&1
-} catch {
-    $releaseExists = $false
-}
-
-if ($LastExitCode -ne 0) {
-    $releaseExists = $false
-}
-
-if ($releaseExists) {
-    Write-Host "Release $tag already exists. Deleting it to refresh all assets..."
-    gh release delete $tag -y >$null 2>&1
-    # Give GitHub API a moment to process deletion
-    Start-Sleep -Seconds 2
-}
-
-Write-Host "Creating new release $tag and uploading assets..."
-gh release create $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --title $tag --notes "Release $tag"
+# 9. Create an immutable GitHub release at the exact pushed commit
+Write-Host "[6/6] Creating GitHub Release and uploading assets..."
+$releaseTarget = (git rev-parse HEAD).Trim()
+Write-Host "Creating release $tag at commit $releaseTarget..."
+gh release create $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --target $releaseTarget --title $tag --notes "Release $tag"
 
 Write-Host "=========================================="
 Write-Host " Build and Release Pipeline completed successfully!"

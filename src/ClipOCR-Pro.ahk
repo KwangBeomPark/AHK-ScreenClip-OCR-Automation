@@ -1,22 +1,26 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.3.0.0
+;@Ahk2Exe-SetVersion 1.4.0.0
 #Include Gdip_All.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.3.0"
+global APP_VERSION := "1.4.0"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
-global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/ClipOCR-Pro/releases"
-global GITHUB_LATEST_RELEASE_API := "https://api.github.com/repos/KwangBeomPark/ClipOCR-Pro/releases/latest"
+global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
+global GITHUB_LATEST_RELEASE_API := "https://api.github.com/repos/KwangBeomPark/01_ClipOCR-Pro/releases/latest"
 
 ; ── Global asset paths and initialization ──
 ; Keep app-owned temp files in a dedicated subfolder instead of the shared Temp root.
 global APP_TEMP_DIR := A_Temp "\ClipOCR-Pro"
 global bmcBtnPath := APP_TEMP_DIR "\bmc_btn.png"
 global githubIconPath := ""
+
+; Headless build/CI check for version parsing, release-asset parsing, hashing, and quality settings.
+if (A_Args.Length > 0 && A_Args[1] == "--health-check")
+    ExitApp(RunInternalHealthCheck())
 
 ; Use the bundled GitHub icon asset instead of downloading one at runtime.
 githubIconPath := PrepareBundledGithubIcon()
@@ -68,7 +72,6 @@ global WINDOW_BORDER_WIDTH := 1 ; Floating capture window border width (px)
 global ANNOTATION_BORDER_WIDTH := 3 ; Red annotation rectangle width (px)
 global UNDO_MAX := 5            ; Maximum undo steps
 global TEXT_TRANSLATE_MAX_CHARS := 5000 ; Safe maximum length for Google Text Translation GET requests
-global JPG_QUALITY := 85        ; Desktop save and size-estimate quality
 global MAIL_COPY_TIMEOUT_SECONDS := 3
 global MAIL_SUBJECT_ALLOWANCE_BYTES := 8 * 1024
 global MAIL_HEADER_ALLOWANCE_BYTES := 64 * 1024
@@ -78,6 +81,8 @@ global MAIL_ENCODING_FACTOR := 1.37
 global REG_PATH := "HKCU\Software\ScreenClipTool"
 global CLIP_WIDTH := 1000
 global COPY_OUTLINE_ENABLED := true
+global SAVE_IMAGE_FORMAT := "png" ; Ctrl+S output format: jpg or png
+global JPG_QUALITY := 90 ; Ctrl+S JPG save and size-estimate quality
 global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
 global TEXT_TRANSLATE_FONT_SIZE := 10
@@ -98,7 +103,8 @@ global TEMP_FILES := []
 global ENABLE_BMC_AUTO_DOWNLOAD := false
 global MAIL_SIZE_CHECK_RUNNING := false
 global UPDATE_CHECK_STATE := { status: "idle", latestVersion: "", releaseUrl: GITHUB_RELEASES_URL,
-    request: 0, startedTick: 0, statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
+    downloadUrl: "", assetName: "", assetSize: 0, sha256: "", lastError: "", request: 0, startedTick: 0,
+    statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
 
 try {
     CLIP_WIDTH := NormalizeClipWidth(RegRead(REG_PATH, "ClipboardWidth"))
@@ -110,6 +116,18 @@ try {
     COPY_OUTLINE_ENABLED := NormalizeCopyOutline(RegRead(REG_PATH, "CopyOutline"))
 } catch {
     COPY_OUTLINE_ENABLED := true
+}
+
+try {
+    JPG_QUALITY := NormalizeJpegQuality(RegRead(REG_PATH, "JpegQuality"))
+} catch {
+    JPG_QUALITY := 90
+}
+
+try {
+    SAVE_IMAGE_FORMAT := NormalizeSaveImageFormat(RegRead(REG_PATH, "SaveImageFormat"))
+} catch {
+    SAVE_IMAGE_FORMAT := "png"
 }
 
 try {
@@ -282,12 +300,19 @@ WidthMenu.Add("1600 px (Ctrl+7)", (*) => SetClipWidth(1600))
 UpdateWidthMenu()
 
 ClipMenu.Add("⚙️ 13. Clipboard Width", WidthMenu)
+
+; 14. Persisted image format/quality preset submenu
+global ImagePresetMenu := Menu()
+for presetIndex, preset in GetImageSavePresetOptions()
+    ImagePresetMenu.Add(preset.label, BindImageSavePreset(presetIndex))
+UpdateImageSavePresetMenu()
+ClipMenu.Add("🖼️ 14. Image Quality && Size", ImagePresetMenu)
 ClipMenu.Add() ; Separator
-ClipMenu.Add("📐 14. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
-ClipMenu.Add("🔽 15. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
-ClipMenu.Add("🔼 16. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
-ClipMenu.Add("❌ 17. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
-ClipMenu.Add("⚙️ 18. Preferences & About", (*) => ShowDashboardDialog())
+ClipMenu.Add("📐 15. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
+ClipMenu.Add("🔽 16. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
+ClipMenu.Add("🔼 17. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
+ClipMenu.Add("❌ 18. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
+ClipMenu.Add("⚙️ 19. Preferences & About", (*) => ShowDashboardDialog())
 
 ; ── Startup welcome tooltip ──
 ToolTip(UIText("startup_ready", Map("app", APP_NAME, "hotkey", GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY))))
@@ -295,6 +320,10 @@ SetTimer(() => ToolTip(), -4000)
 
 SetTimer(TrackLastTextSourceWindow, 250)
 ApplyTextTranslateHotkey()
+
+; Optional support/QA entry point: open the settings window directly.
+if (A_Args.Length > 0 && A_Args[1] == "--settings")
+    SetTimer(ShowDashboardDialog, -100)
 
 ; ── Register capture-window mouse message handlers once (they dispatch by hwnd) ──
 OnMessage(0x0201, WM_LBUTTONDOWN)     ; WM_LBUTTONDOWN
@@ -372,6 +401,25 @@ NormalizeCopyOutline(value) {
     if (value == "1")
         return true
     return true
+}
+
+NormalizeJpegQuality(value) {
+    try {
+        quality := Integer(value)
+    } catch {
+        return 90
+    }
+
+    for _, allowed in [70, 80, 90] {
+        if (quality == allowed)
+            return allowed
+    }
+    return 90
+}
+
+NormalizeSaveImageFormat(value) {
+    value := StrLower(Trim(String(value)))
+    return (value == "jpg") ? "jpg" : "png"
 }
 
 NormalizeTextTranslateFontSize(value) {
@@ -745,12 +793,12 @@ BuildUIStringTable() {
         "fr", "⚠️ Échec de la capture d'écran.",
         "es", "⚠️ Error en la captura de pantalla.")
     t["copy_ok"] := Map(
-        "ko", "✅ 클립보드 복사 완료: {w}×{h}`r`nJPG 예상 {size} (품질 {quality}) | Outline {outline}",
-        "en", "✅ Copied to clipboard: {w}×{h}`r`nEst. JPG {size} (quality {quality}) | Outline {outline}",
-        "pl", "✅ Skopiowano do schowka: {w}×{h}`r`nSzac. JPG {size} (jakość {quality}) | Kontur {outline}",
-        "de", "✅ In Zwischenablage kopiert: {w}×{h}`r`nGesch. JPG {size} (Qualität {quality}) | Kontur {outline}",
-        "fr", "✅ Copié dans le presse-papiers : {w}×{h}`r`nJPG est. {size} (qualité {quality}) | Contour {outline}",
-        "es", "✅ Copiado al portapapeles: {w}×{h}`r`nJPG est. {size} (calidad {quality}) | Contorno {outline}")
+        "ko", "✅ 클립보드 복사 완료: {w}×{h}`r`n{format} 예상 {size} ({quality}) | Outline {outline}",
+        "en", "✅ Copied to clipboard: {w}×{h}`r`nEst. {format} {size} ({quality}) | Outline {outline}",
+        "pl", "✅ Skopiowano do schowka: {w}×{h}`r`nSzac. {format} {size} ({quality}) | Kontur {outline}",
+        "de", "✅ In Zwischenablage kopiert: {w}×{h}`r`nGesch. {format} {size} ({quality}) | Kontur {outline}",
+        "fr", "✅ Copié dans le presse-papiers : {w}×{h}`r`n{format} est. {size} ({quality}) | Contour {outline}",
+        "es", "✅ Copiado al portapapeles: {w}×{h}`r`n{format} est. {size} ({quality}) | Contorno {outline}")
     t["copy_savewarn"] := Map(
         "ko", "`r`n⚠️ 가로폭 설정을 Registry에 저장하지 못했습니다.",
         "en", "`r`n⚠️ Could not save the width setting to the Registry.",
@@ -761,6 +809,9 @@ BuildUIStringTable() {
     t["size_unknown"] := Map(
         "ko", "확인 불가", "en", "unknown", "pl", "nieznany",
         "de", "unbekannt", "fr", "inconnu", "es", "desconocido")
+    t["lossless"] := Map(
+        "ko", "무손실", "en", "lossless", "pl", "bezstratny",
+        "de", "verlustfrei", "fr", "sans perte", "es", "sin pérdida")
     t["copy_failed"] := Map(
         "ko", "⚠️ 클립보드 복사 실패: {error}",
         "en", "⚠️ Copy to clipboard failed: {error}",
@@ -769,12 +820,12 @@ BuildUIStringTable() {
         "fr", "⚠️ Échec de la copie dans le presse-papiers : {error}",
         "es", "⚠️ Error al copiar al portapapeles: {error}")
     t["save_ok"] := Map(
-        "ko", "✅ JPG 저장 완료: {w}×{h} | {size}`r`n{path}",
-        "en", "✅ JPG saved: {w}×{h} | {size}`r`n{path}",
-        "pl", "✅ Zapisano JPG: {w}×{h} | {size}`r`n{path}",
-        "de", "✅ JPG gespeichert: {w}×{h} | {size}`r`n{path}",
-        "fr", "✅ JPG enregistré : {w}×{h} | {size}`r`n{path}",
-        "es", "✅ JPG guardado: {w}×{h} | {size}`r`n{path}")
+        "ko", "✅ {format} 저장 완료: {w}×{h} | {size}`r`n{path}",
+        "en", "✅ {format} saved: {w}×{h} | {size}`r`n{path}",
+        "pl", "✅ Zapisano {format}: {w}×{h} | {size}`r`n{path}",
+        "de", "✅ {format} gespeichert: {w}×{h} | {size}`r`n{path}",
+        "fr", "✅ {format} enregistré : {w}×{h} | {size}`r`n{path}",
+        "es", "✅ {format} guardado: {w}×{h} | {size}`r`n{path}")
     t["save_failed"] := Map(
         "ko", "⚠️ 파일 저장 실패: {error}",
         "en", "⚠️ File save failed: {error}",
@@ -1878,7 +1929,7 @@ SCW_Win2File() {
 }
 
 CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
-    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY
     pOutput := 0
     try {
         if !pBitmap
@@ -1891,11 +1942,14 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
         Gdip_SetBitmapToClipboard(pOutput)
         finalW := Gdip_GetImageWidth(pOutput)
         finalH := Gdip_GetImageHeight(pOutput)
-        jpegBytes := GetEstimatedJpegSize(pOutput, JPG_QUALITY)
-        sizeText := jpegBytes >= 0 ? Format("{:.2f} MB", jpegBytes / 1048576) : UIText("size_unknown")
+        estimatedBytes := GetEstimatedImageSize(pOutput, SAVE_IMAGE_FORMAT, JPG_QUALITY)
+        sizeText := estimatedBytes >= 0 ? Format("{:.2f} MB", estimatedBytes / 1048576) : UIText("size_unknown")
+        formatText := StrUpper(SAVE_IMAGE_FORMAT)
+        qualityText := SAVE_IMAGE_FORMAT == "jpg" ? JPG_QUALITY "%" : UIText("lossless")
         outlineText := COPY_OUTLINE_ENABLED ? "ON" : "OFF"
         saveWarning := settingsSaved ? "" : UIText("copy_savewarn")
-        ToolTip(UIText("copy_ok", Map("w", finalW, "h", finalH, "size", sizeText, "quality", JPG_QUALITY, "outline", outlineText)) saveWarning)
+        ToolTip(UIText("copy_ok", Map("w", finalW, "h", finalH, "format", formatText, "size", sizeText,
+            "quality", qualityText, "outline", outlineText)) saveWarning)
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
         ToolTip(UIText("copy_failed", Map("error", ShortErrorMessage(e.Message))))
@@ -1907,7 +1961,7 @@ CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
 }
 
 SaveBitmapToDesktop(pBitmap) {
-    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY
     pOutput := 0
     try {
         if !pBitmap
@@ -1916,13 +1970,14 @@ SaveBitmapToDesktop(pBitmap) {
         if !pOutput
             throw Error("Could not prepare image")
         TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
-        FileOut := GetUniqueFilePath(GetSaveFolder(), TodayDate, "jpg")
+        FileOut := GetUniqueFilePath(GetSaveFolder(), TodayDate, SAVE_IMAGE_FORMAT)
         if !SafeSaveBitmapToFile(pOutput, FileOut, JPG_QUALITY)
-            throw Error("Could not save JPG file")
+            throw Error("Could not save image file")
         finalW := Gdip_GetImageWidth(pOutput)
         finalH := Gdip_GetImageHeight(pOutput)
         fileBytes := FileGetSize(FileOut)
-        ToolTip(UIText("save_ok", Map("w", finalW, "h", finalH, "size", Format("{:.2f} MB", fileBytes / 1048576), "path", FileOut)))
+        ToolTip(UIText("save_ok", Map("format", StrUpper(SAVE_IMAGE_FORMAT), "w", finalW, "h", finalH,
+            "size", Format("{:.2f} MB", fileBytes / 1048576), "path", FileOut)))
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
         ToolTip(UIText("save_failed", Map("error", ShortErrorMessage(e.Message))))
@@ -2095,12 +2150,13 @@ DrawResizedImageWithEdgeWrap(pGraphics, pBitmap, destW, destH, sourceW, sourceH)
     }
 }
 
-GetEstimatedJpegSize(pBitmap, quality) {
+GetEstimatedImageSize(pBitmap, format, quality) {
     if !pBitmap
         return -1
 
+    format := NormalizeSaveImageFormat(format)
     estimateDir := A_Temp "\ClipOCR-Pro"
-    estimateFile := estimateDir "\jpeg_estimate_" DllCall("GetCurrentProcessId") "_" A_TickCount ".jpg"
+    estimateFile := estimateDir "\image_estimate_" DllCall("GetCurrentProcessId") "_" A_TickCount "." format
     try {
         if !DirExist(estimateDir)
             DirCreate(estimateDir)
@@ -2148,6 +2204,50 @@ SetCopyOutline(enabled) {
     return SafeRegWriteString(COPY_OUTLINE_ENABLED ? 1 : 0, REG_PATH, "CopyOutline")
 }
 
+SetJpegQuality(quality) {
+    global JPG_QUALITY, REG_PATH
+    JPG_QUALITY := NormalizeJpegQuality(quality)
+    return SafeRegWriteString(JPG_QUALITY, REG_PATH, "JpegQuality")
+}
+
+SetSaveImageFormat(format) {
+    global SAVE_IMAGE_FORMAT, REG_PATH
+    SAVE_IMAGE_FORMAT := NormalizeSaveImageFormat(format)
+    return SafeRegWriteString(SAVE_IMAGE_FORMAT, REG_PATH, "SaveImageFormat")
+}
+
+BindImageSavePreset(presetIndex) {
+    return (*) => ApplyImageSavePreset(presetIndex)
+}
+
+ApplyImageSavePreset(presetIndex, showFeedback := true) {
+    presets := GetImageSavePresetOptions()
+    if (presetIndex < 1 || presetIndex > presets.Length)
+        presetIndex := 1
+    preset := presets[presetIndex]
+    formatSaved := SetSaveImageFormat(preset.format)
+    qualitySaved := SetJpegQuality(preset.quality)
+    UpdateImageSavePresetMenu()
+
+    if showFeedback {
+        saveWarning := (formatSaved && qualitySaved) ? "" : "`r`n⚠️ Could not save this preset to the Registry."
+        ToolTip("✅ Image preset: " preset.label saveWarning)
+        SetTimer(() => ToolTip(), -3000)
+    }
+    return formatSaved && qualitySaved
+}
+
+UpdateImageSavePresetMenu() {
+    global ImagePresetMenu, SAVE_IMAGE_FORMAT, JPG_QUALITY
+    if !IsObject(ImagePresetMenu)
+        return
+    presets := GetImageSavePresetOptions()
+    for _, preset in presets
+        try ImagePresetMenu.Uncheck(preset.label)
+    selectedIndex := GetImageSavePresetIndex(SAVE_IMAGE_FORMAT, JPG_QUALITY)
+    try ImagePresetMenu.Check(presets[selectedIndex].label)
+}
+
 UpdateWidthMenu() {
     global CLIP_WIDTH
     for _, width in GetClipWidths()
@@ -2193,6 +2293,39 @@ GetClipWidthFromLabel(label) {
     if RegExMatch(label, "^(\d+)", &match)
         return NormalizeClipWidth(match[1])
     return 1000
+}
+
+GetImageSavePresetOptions() {
+    ; Ratios are quick planning estimates. The real tooltip estimate remains authoritative.
+    return [{ label: "PNG Lossless — Size Doc 100% · Pic 100%", format: "png", quality: 90 },
+        { label: "JPG 90% High — Size Doc 83% · Pic 70%", format: "jpg", quality: 90 },
+        { label: "JPG 80% Medium — Size Doc 65% · Pic 50%", format: "jpg", quality: 80 },
+        { label: "JPG 70% Low — Size Doc 50% · Pic 35%", format: "jpg", quality: 70 }]
+}
+
+GetImageSavePresetLabels() {
+    labels := []
+    for _, option in GetImageSavePresetOptions()
+        labels.Push(option.label)
+    return labels
+}
+
+GetImageSavePresetIndex(format, quality) {
+    format := NormalizeSaveImageFormat(format)
+    quality := NormalizeJpegQuality(quality)
+    for index, option in GetImageSavePresetOptions() {
+        if (option.format == format && (format == "png" || option.quality == quality))
+            return index
+    }
+    return 1
+}
+
+GetImageSavePresetFromLabel(label) {
+    for _, option in GetImageSavePresetOptions() {
+        if (option.label == label)
+            return option
+    }
+    return GetImageSavePresetOptions()[1]
 }
 
 GetTextTranslateLangOptions() {
@@ -2369,6 +2502,11 @@ StartGithubUpdateCheck(force := false) {
     UPDATE_CHECK_STATE.status := "checking"
     UPDATE_CHECK_STATE.latestVersion := ""
     UPDATE_CHECK_STATE.releaseUrl := GITHUB_RELEASES_URL
+    UPDATE_CHECK_STATE.downloadUrl := ""
+    UPDATE_CHECK_STATE.assetName := ""
+    UPDATE_CHECK_STATE.assetSize := 0
+    UPDATE_CHECK_STATE.sha256 := ""
+    UPDATE_CHECK_STATE.lastError := ""
     UPDATE_CHECK_STATE.startedTick := A_TickCount
     RenderGithubUpdateState()
 
@@ -2416,7 +2554,14 @@ PollGithubUpdateCheck() {
 
         UPDATE_CHECK_STATE.latestVersion := releaseInfo.version
         UPDATE_CHECK_STATE.releaseUrl := releaseInfo.releaseUrl
-        UPDATE_CHECK_STATE.status := CompareSemanticVersions(releaseInfo.version, APP_VERSION) > 0 ? "update" : "current"
+        UPDATE_CHECK_STATE.downloadUrl := releaseInfo.downloadUrl
+        UPDATE_CHECK_STATE.assetName := releaseInfo.assetName
+        UPDATE_CHECK_STATE.assetSize := releaseInfo.assetSize
+        UPDATE_CHECK_STATE.sha256 := releaseInfo.sha256
+        if (CompareSemanticVersions(releaseInfo.version, APP_VERSION) > 0)
+            UPDATE_CHECK_STATE.status := releaseInfo.downloadUrl != "" ? "update" : "manual_update"
+        else
+            UPDATE_CHECK_STATE.status := "current"
         UPDATE_CHECK_STATE.request := 0
         SetTimer(PollGithubUpdateCheck, 0)
         RenderGithubUpdateState()
@@ -2425,10 +2570,11 @@ PollGithubUpdateCheck() {
     }
 }
 
-FinishGithubUpdateCheckError() {
+FinishGithubUpdateCheckError(message := "") {
     global UPDATE_CHECK_STATE
     SetTimer(PollGithubUpdateCheck, 0)
     UPDATE_CHECK_STATE.status := "error"
+    UPDATE_CHECK_STATE.lastError := ShortErrorMessage(message)
     UPDATE_CHECK_STATE.request := 0
     RenderGithubUpdateState()
 }
@@ -2445,26 +2591,80 @@ RenderGithubUpdateState() {
             UPDATE_CHECK_STATE.detailCtrl.Value := "Current version: v" APP_VERSION
         } else if (UPDATE_CHECK_STATE.status == "update") {
             UPDATE_CHECK_STATE.statusCtrl.Value := "Update available: v" UPDATE_CHECK_STATE.latestVersion
-            UPDATE_CHECK_STATE.detailCtrl.Value := "Current v" APP_VERSION "  •  Latest v" UPDATE_CHECK_STATE.latestVersion
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Download is verified with GitHub's SHA-256 digest."
+        } else if (UPDATE_CHECK_STATE.status == "manual_update") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Update available: v" UPDATE_CHECK_STATE.latestVersion
+            UPDATE_CHECK_STATE.detailCtrl.Value := "No verified EXE asset was found. Open the release page."
+        } else if (UPDATE_CHECK_STATE.status == "downloading") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Downloading v" UPDATE_CHECK_STATE.latestVersion "..."
+            UPDATE_CHECK_STATE.detailCtrl.Value := "The app will restart after verification."
         } else if (UPDATE_CHECK_STATE.status == "current") {
             UPDATE_CHECK_STATE.statusCtrl.Value := "You're up to date"
             UPDATE_CHECK_STATE.detailCtrl.Value := "Current v" APP_VERSION "  •  Latest v" UPDATE_CHECK_STATE.latestVersion
         } else if (UPDATE_CHECK_STATE.status == "error") {
             UPDATE_CHECK_STATE.statusCtrl.Value := "Update check unavailable"
-            UPDATE_CHECK_STATE.detailCtrl.Value := "Check your network connection and try again."
+            UPDATE_CHECK_STATE.detailCtrl.Value := UPDATE_CHECK_STATE.lastError != "" ? UPDATE_CHECK_STATE.lastError : "Check your network connection and try again."
         } else {
             UPDATE_CHECK_STATE.statusCtrl.Value := "Update status: Not checked"
             UPDATE_CHECK_STATE.detailCtrl.Value := "Current version: v" APP_VERSION
         }
-        UPDATE_CHECK_STATE.updateBtn.Enabled := (UPDATE_CHECK_STATE.status == "update")
+        UPDATE_CHECK_STATE.updateBtn.Enabled := (UPDATE_CHECK_STATE.status == "update" || UPDATE_CHECK_STATE.status == "manual_update")
     }
 }
 
-OpenAvailableGithubUpdate(*) {
-    global UPDATE_CHECK_STATE
-    if (UPDATE_CHECK_STATE.status != "update" || !IsTrustedGithubReleaseUrl(UPDATE_CHECK_STATE.releaseUrl))
+DownloadAndInstallGithubUpdate(*) {
+    global UPDATE_CHECK_STATE, APP_NAME, APP_TEMP_DIR
+    if (UPDATE_CHECK_STATE.status == "manual_update") {
+        if IsTrustedGithubReleaseUrl(UPDATE_CHECK_STATE.releaseUrl)
+            try Run(UPDATE_CHECK_STATE.releaseUrl)
         return
-    try Run(UPDATE_CHECK_STATE.releaseUrl)
+    }
+    if (UPDATE_CHECK_STATE.status != "update")
+        return
+
+    if !A_IsCompiled {
+        MsgBox("Automatic replacement is available in the compiled app.`r`nThe GitHub release page will open instead.",
+            APP_NAME, "Iconi")
+        if IsTrustedGithubReleaseUrl(UPDATE_CHECK_STATE.releaseUrl)
+            try Run(UPDATE_CHECK_STATE.releaseUrl)
+        return
+    }
+
+    answer := MsgBox("The update will close all floating capture windows.`r`nSave or copy anything you still need before continuing.`r`n`r`nDownload, verify, and install v"
+        UPDATE_CHECK_STATE.latestVersion " now?", APP_NAME " Update", "YesNo Icon! Default2")
+    if (answer != "Yes")
+        return
+
+    UPDATE_CHECK_STATE.status := "downloading"
+    UPDATE_CHECK_STATE.lastError := ""
+    RenderGithubUpdateState()
+    Sleep(50)
+
+    updateDir := APP_TEMP_DIR "\updates"
+    stagedPath := updateDir "\" UPDATE_CHECK_STATE.assetName
+    try {
+        if !DirExist(updateDir)
+            DirCreate(updateDir)
+        if FileExist(stagedPath)
+            FileDelete(stagedPath)
+        Download(UPDATE_CHECK_STATE.downloadUrl, stagedPath)
+        validationError := ValidateDownloadedUpdate(stagedPath, UPDATE_CHECK_STATE)
+        if (validationError != "")
+            throw Error(validationError)
+        if !LaunchUpdateHelper(stagedPath, A_ScriptFullPath, UPDATE_CHECK_STATE.sha256)
+            throw Error("Could not start the update helper.")
+        ExitApp
+    } catch as e {
+        try {
+            if FileExist(stagedPath)
+                FileDelete(stagedPath)
+        }
+        UPDATE_CHECK_STATE.status := "error"
+        UPDATE_CHECK_STATE.lastError := "Update failed: " ShortErrorMessage(e.Message, 90)
+        RenderGithubUpdateState()
+        MsgBox(UPDATE_CHECK_STATE.lastError "`r`n`r`nYou can still download the release manually from GitHub.",
+            APP_NAME " Update", "Iconx")
+    }
 }
 
 ParseGithubLatestRelease(jsonText) {
@@ -2493,7 +2693,36 @@ ParseGithubLatestRelease(jsonText) {
         version := assetMatch[1]
     if (version == "")
         return 0
-    return { version: version, releaseUrl: releaseUrl }
+    asset := FindGithubReleaseAsset(jsonText, version)
+    if IsObject(asset) {
+        return { version: version, releaseUrl: releaseUrl, downloadUrl: asset.downloadUrl,
+            assetName: asset.name, assetSize: asset.size, sha256: asset.sha256 }
+    }
+    return { version: version, releaseUrl: releaseUrl, downloadUrl: "", assetName: "", assetSize: 0, sha256: "" }
+}
+
+FindGithubReleaseAsset(jsonText, version) {
+    expectedName := "ClipOCR-Pro.v" version ".exe"
+    escapedVersion := StrReplace(version, ".", "\.")
+    assetPattern := '"name"\s*:\s*"ClipOCR-Pro\.v' escapedVersion '\.exe"'
+    assetPos := RegExMatch(jsonText, assetPattern)
+    if !assetPos
+        return 0
+
+    ; All remaining release-asset fields follow name in GitHub's asset object.
+    assetJson := SubStr(jsonText, assetPos, 8000)
+    if !RegExMatch(assetJson, '"size"\s*:\s*(\d+)', &sizeMatch)
+        return 0
+    if !RegExMatch(assetJson, '"digest"\s*:\s*"sha256:([0-9a-fA-F]{64})"', &digestMatch)
+        return 0
+    if !RegExMatch(assetJson, '"browser_download_url"\s*:\s*"([^"]+)"', &downloadMatch)
+        return 0
+
+    downloadUrl := DecodeGithubJsonString(downloadMatch[1])
+    assetSize := Integer(sizeMatch[1])
+    if (!IsTrustedGithubAssetUrl(downloadUrl, version) || assetSize < 100000 || assetSize > 100 * 1024 * 1024)
+        return 0
+    return { name: expectedName, size: assetSize, sha256: StrLower(digestMatch[1]), downloadUrl: downloadUrl }
 }
 
 DecodeGithubJsonString(value) {
@@ -2522,7 +2751,274 @@ CompareSemanticVersions(leftVersion, rightVersion) {
 }
 
 IsTrustedGithubReleaseUrl(url) {
-    return RegExMatch(url, "i)^https://github\.com/KwangBeomPark/ClipOCR-Pro/releases(?:/|$)") > 0
+    return RegExMatch(url, "i)^https://github\.com/KwangBeomPark/(?:01_)?ClipOCR-Pro/releases(?:/|$)") > 0
+}
+
+IsTrustedGithubAssetUrl(url, version) {
+    expectedUrl := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v" version "/ClipOCR-Pro.v" version ".exe"
+    return StrLower(url) == StrLower(expectedUrl)
+}
+
+ValidateDownloadedUpdate(filePath, releaseInfo) {
+    if !FileExist(filePath)
+        return "The downloaded file is missing."
+    try {
+        if (FileGetSize(filePath) != releaseInfo.assetSize)
+            return "The downloaded file size does not match GitHub."
+    } catch {
+        return "The downloaded file size could not be verified."
+    }
+
+    file := 0
+    try {
+        file := FileOpen(filePath, "r")
+        header := Buffer(2, 0)
+        if (!IsObject(file) || file.RawRead(header, 2) != 2 || NumGet(header, 0, "UShort") != 0x5A4D)
+            return "The downloaded file is not a valid Windows executable."
+    } catch {
+        return "The downloaded executable could not be inspected."
+    } finally {
+        if IsObject(file)
+            try file.Close()
+    }
+
+    try downloadedVersion := ExtractSemanticVersion(FileGetVersion(filePath))
+    catch
+        return "The downloaded executable has no readable version."
+    if (downloadedVersion != releaseInfo.latestVersion)
+        return "The downloaded executable version does not match the release."
+
+    actualHash := GetFileSha256(filePath)
+    if (actualHash == "" || StrLower(actualHash) != StrLower(releaseInfo.sha256))
+        return "SHA-256 verification failed. The file was not installed."
+    return ""
+}
+
+GetFileSha256(filePath) {
+    hProvider := 0
+    hHash := 0
+    file := 0
+    if !DllCall("advapi32\CryptAcquireContextW", "Ptr*", &hProvider, "Ptr", 0, "Ptr", 0, "UInt", 24,
+        "UInt", 0xF0000000)
+        return ""
+
+    try {
+        if !DllCall("advapi32\CryptCreateHash", "Ptr", hProvider, "UInt", 0x800C, "Ptr", 0, "UInt", 0, "Ptr*", &hHash)
+            return ""
+        file := FileOpen(filePath, "r")
+        if !IsObject(file)
+            return ""
+        chunk := Buffer(1024 * 1024, 0)
+        Loop {
+            bytesRead := file.RawRead(chunk, chunk.Size)
+            if !bytesRead
+                break
+            if !DllCall("advapi32\CryptHashData", "Ptr", hHash, "Ptr", chunk.Ptr, "UInt", bytesRead, "UInt", 0)
+                return ""
+        }
+
+        hashLength := 32
+        hashBytes := Buffer(hashLength, 0)
+        if !DllCall("advapi32\CryptGetHashParam", "Ptr", hHash, "UInt", 2, "Ptr", hashBytes.Ptr, "UInt*", &hashLength,
+            "UInt", 0)
+            return ""
+        result := ""
+        Loop hashLength
+            result .= Format("{:02x}", NumGet(hashBytes, A_Index - 1, "UChar"))
+        return result
+    } catch {
+        return ""
+    } finally {
+        if IsObject(file)
+            try file.Close()
+        if hHash
+            DllCall("advapi32\CryptDestroyHash", "Ptr", hHash)
+        if hProvider
+            DllCall("advapi32\CryptReleaseContext", "Ptr", hProvider, "UInt", 0)
+    }
+}
+
+CanWriteToFolder(folder) {
+    probePath := folder "\.clipocr_update_probe_" DllCall("GetCurrentProcessId") "_" A_TickCount ".tmp"
+    try {
+        FileAppend("probe", probePath, "UTF-8")
+        FileDelete(probePath)
+        return true
+    } catch {
+        try {
+            if FileExist(probePath)
+                FileDelete(probePath)
+        }
+        return false
+    }
+}
+
+LaunchUpdateHelper(sourcePath, targetPath, expectedHash) {
+    global APP_TEMP_DIR
+    SplitPath(targetPath, , &targetDir)
+    helperPath := APP_TEMP_DIR "\update_clipocr.ps1"
+    logPath := APP_TEMP_DIR "\update.log"
+    helperLines := [
+        "param(",
+        "    [Parameter(Mandatory=$true)][int]$ParentProcessId,",
+        "    [Parameter(Mandatory=$true)][string]$Source,",
+        "    [Parameter(Mandatory=$true)][string]$Target,",
+        "    [Parameter(Mandatory=$true)][string]$ExpectedHash,",
+        "    [Parameter(Mandatory=$true)][string]$LogPath",
+        ")",
+        "$ErrorActionPreference = 'Stop'",
+        "$replacement = $null",
+        "$backup = $Target + '.previous'",
+        "try {",
+        "    Wait-Process -Id $ParentProcessId -Timeout 30 -ErrorAction SilentlyContinue",
+        "    if (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {",
+        "        throw 'The running app did not close in time.'",
+        "    }",
+        "    $actualHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash.ToLowerInvariant()",
+        "    if ($actualHash -ne $ExpectedHash.ToLowerInvariant()) {",
+        "        throw 'The staged update hash changed before installation.'",
+        "    }",
+        "    $targetDirectory = [IO.Path]::GetDirectoryName($Target)",
+        "    $replacement = Join-Path $targetDirectory ('.clipocr_' + [guid]::NewGuid().ToString('N') + '.exe')",
+        "    Copy-Item -LiteralPath $Source -Destination $replacement -Force",
+        "    if (Test-Path -LiteralPath $Target) {",
+        "        Copy-Item -LiteralPath $Target -Destination $backup -Force",
+        "    }",
+        "    try {",
+        "        Copy-Item -LiteralPath $replacement -Destination $Target -Force",
+        "    } catch {",
+        "        if (Test-Path -LiteralPath $backup) {",
+        "            Copy-Item -LiteralPath $backup -Destination $Target -Force",
+        "        }",
+        "        throw",
+        "    }",
+        "    Start-Process -FilePath $Target",
+        "    Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue",
+        "    Set-Content -LiteralPath $LogPath -Value ('Updated successfully at ' + (Get-Date).ToString('s')) -Encoding UTF8",
+        "} catch {",
+        "    Add-Content -LiteralPath $LogPath -Value ((Get-Date).ToString('s') + ' Update failed: ' + $_.Exception.Message) -Encoding UTF8",
+        "    Add-Type -AssemblyName PresentationFramework",
+        "    [System.Windows.MessageBox]::Show('ClipOCR-Pro could not finish the update. The previous app file was preserved. See: ' + $LogPath, 'ClipOCR-Pro Update') | Out-Null",
+        "    exit 1",
+        "} finally {",
+        "    if ($replacement -and (Test-Path -LiteralPath $replacement)) {",
+        "        Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue",
+        "    }",
+        "}",
+        "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue"
+    ]
+    helperScript := ""
+    for index, line in helperLines
+        helperScript .= (index == 1 ? "" : "`r`n") line
+
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        if FileExist(helperPath)
+            FileDelete(helperPath)
+        FileAppend(helperScript, helperPath, "UTF-8")
+        command := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' helperPath '" -ParentProcessId '
+            DllCall("GetCurrentProcessId") ' -Source "' sourcePath '" -Target "' targetPath '" -ExpectedHash "'
+            expectedHash '" -LogPath "' logPath '"'
+        if CanWriteToFolder(targetDir)
+            Run(command, , "Hide")
+        else
+            Run("*RunAs " command)
+        return true
+    } catch {
+        return false
+    }
+}
+
+RunInternalHealthCheck() {
+    errors := []
+    healthDir := A_Temp "\ClipOCR-Pro"
+    healthLog := healthDir "\health-check.log"
+    Check(condition, message) {
+        if !condition
+            errors.Push(message)
+    }
+
+    Check(CompareSemanticVersions("1.10.0", "1.9.9") == 1, "semantic version comparison")
+    Check(ExtractSemanticVersion("Release v2.3.4") == "2.3.4", "semantic version extraction")
+    Check(NormalizeJpegQuality(80) == 80 && NormalizeJpegQuality(85) == 90, "JPG quality normalization")
+    Check(NormalizeSaveImageFormat("JPG") == "jpg" && NormalizeSaveImageFormat("gif") == "png",
+        "save image format normalization")
+    presetFixture := GetImageSavePresetOptions()
+    Check(presetFixture.Length == 4 && GetImageSavePresetIndex("png", 90) == 1
+        && GetImageSavePresetIndex("jpg", 80) == 3, "image save presets")
+
+    fixtureHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    fixtureJson := '{"tag_name":"v9.8.7","name":"Release v9.8.7","html_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/tag/v9.8.7","assets":[{"name":"ClipOCR-Pro.v9.8.7.exe","size":1569280,"digest":"sha256:'
+    fixtureJson .= fixtureHash
+    fixtureJson .= '","browser_download_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v9.8.7/ClipOCR-Pro.v9.8.7.exe"}]}'
+    releaseInfo := ParseGithubLatestRelease(fixtureJson)
+    Check(IsObject(releaseInfo), "GitHub release parsing")
+    if IsObject(releaseInfo) {
+        Check(releaseInfo.version == "9.8.7", "GitHub release version")
+        Check(releaseInfo.assetName == "ClipOCR-Pro.v9.8.7.exe", "GitHub asset selection")
+        Check(releaseInfo.assetSize == 1569280, "GitHub asset size")
+        Check(releaseInfo.sha256 == fixtureHash, "GitHub asset digest")
+    }
+
+    hashFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".txt"
+    try {
+        FileAppend("abc", hashFixture, "UTF-8-RAW")
+        Check(GetFileSha256(hashFixture) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "SHA-256 calculation")
+    } catch as e {
+        errors.Push("SHA-256 fixture: " ShortErrorMessage(e.Message))
+    } finally {
+        try {
+            if FileExist(hashFixture)
+                FileDelete(hashFixture)
+        }
+    }
+
+    formatToken := 0
+    formatBitmap := 0
+    formatGraphics := 0
+    pngFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".png"
+    jpgFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".jpg"
+    try {
+        formatToken := Gdip_Startup()
+        formatBitmap := Gdip_CreateBitmap(64, 64)
+        formatGraphics := Gdip_GraphicsFromImage(formatBitmap)
+        Gdip_GraphicsClear(formatGraphics, 0xFFF4F4F4)
+        Check(SafeSaveBitmapToFile(formatBitmap, pngFixture, 100) && FileGetSize(pngFixture) > 0,
+            "PNG lossless save")
+        Check(SafeSaveBitmapToFile(formatBitmap, jpgFixture, 90) && FileGetSize(jpgFixture) > 0,
+            "JPG quality save")
+    } catch as e {
+        errors.Push("image format fixture: " ShortErrorMessage(e.Message))
+    } finally {
+        if formatGraphics
+            try Gdip_DeleteGraphics(formatGraphics)
+        if formatBitmap
+            try Gdip_DisposeImage(formatBitmap)
+        if formatToken
+            try Gdip_Shutdown(formatToken)
+        try {
+            if FileExist(pngFixture)
+                FileDelete(pngFixture)
+            if FileExist(jpgFixture)
+                FileDelete(jpgFixture)
+        }
+    }
+
+    try {
+        if !DirExist(healthDir)
+            DirCreate(healthDir)
+        if FileExist(healthLog)
+            FileDelete(healthLog)
+        if (errors.Length == 0) {
+            FileAppend("ClipOCR-Pro health check: PASS`r`n", healthLog, "UTF-8")
+            return 0
+        }
+        for _, message in errors
+            FileAppend("FAIL: " message "`r`n", healthLog, "UTF-8")
+    }
+    return 1
 }
 
 SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel) {
@@ -2558,7 +3054,8 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit) {
+SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs,
+    SaveFolderEdit) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     settingsSaved := true
 
@@ -2575,6 +3072,12 @@ SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCo
 
     if !SetClipWidth(GetClipWidthFromLabel(WidthCombo.Text))
         settingsSaved := false
+    selectedPreset := GetImageSavePresetFromLabel(PresetCombo.Text)
+    if !SetSaveImageFormat(selectedPreset.format)
+        settingsSaved := false
+    if !SetJpegQuality(selectedPreset.quality)
+        settingsSaved := false
+    UpdateImageSavePresetMenu()
     if !SetCopyOutline(OutlineChk.Value)
         settingsSaved := false
     if !SetTextTranslateFontSize(FontSizeEdit.Value)
@@ -2606,7 +3109,7 @@ SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCo
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -2633,7 +3136,7 @@ ShowDashboardDialog() {
     CloseBtn.OnEvent("Click", DestroyDash)
 
     ; --- Left sidebar ---
-    DashGui.Add("Text", "x0 y45 w160 h455 Background27272A", "") ; Sidebar background
+    DashGui.Add("Text", "x0 y45 w160 h525 Background27272A", "") ; Sidebar background
 
     ; Tab buttons
     TabGenBtn := DashGui.Add("Text", "x10 y60 w140 h40 +0x200 Center +BackgroundTrans cWhite Background3F3F46", "⚙️ General")
@@ -2645,7 +3148,7 @@ ShowDashboardDialog() {
     TabAbtBtn := DashGui.Add("Text", "x10 y160 w140 h40 +0x200 Center +BackgroundTrans cGray", "ℹ️ About")
     TabAbtBtn.SetFont("s10 Bold", "Segoe UI")
 
-    ManualBtn := DashGui.Add("Text", "x10 y450 w140 h32 BackgroundFFDD00 c1E1E24 Center +0x200", "📖 Manual")
+    ManualBtn := DashGui.Add("Text", "x10 y520 w140 h32 BackgroundFFDD00 c1E1E24 Center +0x200", "📖 Manual")
     ManualBtn.SetFont("s10 Bold", "Segoe UI")
     ManualBtn.OnEvent("Click", (*) => ShowManualDialog())
 
@@ -2653,7 +3156,7 @@ ShowDashboardDialog() {
 
     ; 1. General Panel
     GenPanel := []
-    lbl1 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Image Paste Default")
+    lbl1 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Image Output Defaults")
     lbl1.SetFont("s10 Bold")
     GenPanel.Push(lbl1)
 
@@ -2661,41 +3164,46 @@ ShowDashboardDialog() {
     WidthCombo := DashGui.Add("DropDownList", "x380 y90 w210 Choose" GetClipWidthIndex(CLIP_WIDTH), GetClipWidthLabels())
     GenPanel.Push(WidthCombo)
 
-    OutlineChk := DashGui.Add("CheckBox", "x180 y126 w580 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
+    GenPanel.Push(DashGui.Add("Text", "x180 y130 w190 h22 +BackgroundTrans cCCCCCC", "Image Quality && Size"))
+    PresetCombo := DashGui.Add("DropDownList", "x380 y126 w380 Choose" GetImageSavePresetIndex(SAVE_IMAGE_FORMAT,
+        JPG_QUALITY), GetImageSavePresetLabels())
+    GenPanel.Push(PresetCombo)
+
+    OutlineChk := DashGui.Add("CheckBox", "x180 y162 w580 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
         " Add 1px black outline to copied/saved image")
     GenPanel.Push(OutlineChk)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y166 w580 h1 Background3F3F46", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y200 w580 h1 Background3F3F46", ""))
 
-    lblTextSize := DashGui.Add("Text", "x180 y185 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
+    lblTextSize := DashGui.Add("Text", "x180 y215 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
     lblTextSize.SetFont("s10 Bold")
     GenPanel.Push(lblTextSize)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y218 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
-    FontSizeEdit := DashGui.Add("Edit", "x380 y214 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
+    GenPanel.Push(DashGui.Add("Text", "x180 y248 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
+    FontSizeEdit := DashGui.Add("Edit", "x380 y244 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
     GenPanel.Push(FontSizeEdit)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y254 w580 h1 Background3F3F46", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y282 w580 h1 Background3F3F46", ""))
 
-    lbl2 := DashGui.Add("Text", "x180 y275 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
+    lbl2 := DashGui.Add("Text", "x180 y298 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
     lbl2.SetFont("s10 Bold")
     GenPanel.Push(lbl2)
-    GenPanel.Push(DashGui.Add("Text", "x180 y305 w580 h58 Background2A2D3C", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y328 w580 h58 Background2A2D3C", ""))
     isStartup := IsStartupEnabled()
-    StartupChk := DashGui.Add("CheckBox", "x195 y313 w550 h24 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
+    StartupChk := DashGui.Add("CheckBox", "x195 y336 w550 h24 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
     StartupChk.SetFont("s10 Bold", "Segoe UI")
     GenPanel.Push(StartupChk)
-    GenPanel.Push(DashGui.Add("Text", "x198 y339 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
+    GenPanel.Push(DashGui.Add("Text", "x198 y362 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
 
     ; Save location (Ctrl+S destination)
-    GenPanel.Push(DashGui.Add("Text", "x180 y372 w580 h1 Background3F3F46", ""))
-    lblSave := DashGui.Add("Text", "x180 y384 w580 h22 +BackgroundTrans cFFFFFF", "Save to File (Ctrl+S)")
+    GenPanel.Push(DashGui.Add("Text", "x180 y398 w580 h1 Background3F3F46", ""))
+    lblSave := DashGui.Add("Text", "x180 y410 w580 h22 +BackgroundTrans cFFFFFF", "Save to File (Ctrl+S)")
     lblSave.SetFont("s10 Bold")
     GenPanel.Push(lblSave)
-    GenPanel.Push(DashGui.Add("Text", "x180 y414 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
-    SaveFolderEdit := DashGui.Add("Edit", "x295 y410 w305 h24 ReadOnly", GetSaveFolder())
+    GenPanel.Push(DashGui.Add("Text", "x180 y442 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
+    SaveFolderEdit := DashGui.Add("Edit", "x295 y438 w305 h24 ReadOnly", GetSaveFolder())
     GenPanel.Push(SaveFolderEdit)
-    BrowseSaveBtn := DashGui.Add("Button", "x610 y409 w150 h26", "📁 Browse…")
+    BrowseSaveBtn := DashGui.Add("Button", "x610 y437 w150 h26", "📁 Browse…")
     GenPanel.Push(BrowseSaveBtn)
 
     BrowseSaveFolder(*) {
@@ -2812,7 +3320,7 @@ ShowDashboardDialog() {
     UpdateStatusText.SetFont("s10 Bold", "Segoe UI")
     UpdateDetailText := DashGui.Add("Text", "x195 y160 w300 h20 +BackgroundTrans cA0A0A0", "Current version: v" APP_VERSION)
     CheckUpdateBtn := DashGui.Add("Button", "x505 y137 w105 h32", "Check Again")
-    ViewUpdateBtn := DashGui.Add("Button", "x620 y137 w125 h32 Disabled", "View Update")
+    ViewUpdateBtn := DashGui.Add("Button", "x610 y137 w135 h32 Disabled", "Download && Update")
     AbtPanel.Push(UpdateStatusText)
     AbtPanel.Push(UpdateDetailText)
     AbtPanel.Push(CheckUpdateBtn)
@@ -2858,7 +3366,7 @@ ShowDashboardDialog() {
 
     AttachGithubUpdateControls(UpdateStatusText, UpdateDetailText, ViewUpdateBtn, DashGui.Hwnd)
     CheckUpdateBtn.OnEvent("Click", (*) => StartGithubUpdateCheck(true))
-    ViewUpdateBtn.OnEvent("Click", OpenAvailableGithubUpdate)
+    ViewUpdateBtn.OnEvent("Click", DownloadAndInstallGithubUpdate)
 
     ShowAboutPanel(*) {
         SwitchDashboardPanel(3, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
@@ -2872,12 +3380,13 @@ ShowDashboardDialog() {
     TabAbtBtn.OnEvent("Click", ShowAboutPanel)
 
     ; --- Shared bottom buttons ---
-    DashGui.Add("Text", "x160 y440 w620 h1 Background3F3F46", "") ; Top border divider
-    SaveBtn := DashGui.Add("Button", "x550 y455 w100 h32", "Save && Close")
-    CancelBtn := DashGui.Add("Button", "x660 y455 w100 h32", "Cancel")
+    DashGui.Add("Text", "x160 y510 w620 h1 Background3F3F46", "") ; Top border divider
+    SaveBtn := DashGui.Add("Button", "x550 y525 w100 h32", "Save && Close")
+    CancelBtn := DashGui.Add("Button", "x660 y525 w100 h32", "Cancel")
 
     SaveAllSettings(*) {
-        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit)
+        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, FontSizeEdit, HotkeyCombo,
+            LangCombo, LV_ImageLangs, SaveFolderEdit)
         if settingsSaved
             ToolTip("✅ All settings saved.")
         else
@@ -2895,8 +3404,8 @@ ShowDashboardDialog() {
     ; Initial tab setup
     SwitchDashboardPanel(1, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
 
-    settingsPos := GetCenteredPositionOnMouseMonitor(780, 500)
-    DashGui.Show("x" settingsPos.x " y" settingsPos.y " w780 h500")
+    settingsPos := GetCenteredPositionOnMouseMonitor(780, 570)
+    DashGui.Show("x" settingsPos.x " y" settingsPos.y " w780 h570")
     DashboardHwnd := DashGui.Hwnd
 }
 
@@ -3187,7 +3696,7 @@ GetManualText(lang) {
               📋 Ctrl + C: 클립보드에 이미지 복사
               📐 Ctrl + 0: Original Size로 설정 후 원본 크기 복사
               📐 Ctrl + 1~7: 가로 400~1600px로 설정 후 즉시 복사
-              💾 Ctrl + S: 현재 출력 설정으로 저장 폴더에 JPG 저장 (기본: 바탕화면)
+              💾 Ctrl + S: 현재 출력 설정으로 저장 폴더에 JPG/PNG 저장 (기본: 바탕화면)
               Esc: 현재 캡처 창 닫기
               Ctrl + Esc: 모든 캡처 창 닫기
             
@@ -3204,9 +3713,10 @@ GetManualText(lang) {
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             • 클립보드 이미지 크기: Original Size 또는 400~1600px
+            • 파일 저장 프리셋: PNG(Doc/Pic 100%), JPG 90%(Doc 83%·Pic 70%), JPG 80%(65%·50%), JPG 70%(50%·35%)
             • 복사/저장 이미지 검정 아웃라인: 켜기/끄기
-            • 저장 폴더(Ctrl+S): General 탭에서 JPG 저장 위치 선택 (기본: 바탕화면)
-            • About 탭: GitHub 최신 버전 확인 및 릴리즈 페이지 열기
+            • 저장 폴더(Ctrl+S): General 탭에서 이미지 저장 위치 선택 (기본: 바탕화면)
+            • About 탭: GitHub 최신 버전 확인, 검증된 EXE 다운로드 및 자동 재시작
             • 번역 단축키: Win+CapsLock 등 5가지 옵션
             • 번역 결과 언어: 한국어, 영어, 폴란드어 등 유럽 언어 49개 지원
         )"
@@ -3250,7 +3760,7 @@ GetManualText(lang) {
               📋 Ctrl + C: kopiuj do schowka
               📐 Ctrl + 0: ustaw oryginalny rozmiar i skopiuj
               📐 Ctrl + 1~7: ustaw szerokość 400~1600 px i skopiuj
-              💾 Ctrl + S: zapisz JPG na pulpicie
+              💾 Ctrl + S: zapisz JPG/PNG w ustawionym folderze
               Esc: zamknij bieżące okno
               Ctrl + Esc: zamknij wszystkie okna
             
@@ -3267,8 +3777,9 @@ GetManualText(lang) {
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             • Rozmiar obrazu: oryginalny lub szerokość 400~1600 px
+            • Ustawienie zapisu: PNG 100% lub JPG 90/80/70% z szacunkami Doc/Pic
             • Czarny kontur kopiowanego/zapisanego obrazu: wł./wył.
-            • Karta About: sprawdzanie aktualizacji GitHub
+            • Karta About: sprawdzanie, pobieranie i instalacja aktualizacji GitHub
             • Skrót do tłumaczenia: 5 opcji
             • Język tłumaczenia: 49 języków europejskich
         )"
@@ -3312,7 +3823,7 @@ GetManualText(lang) {
               📋 Strg + C: In Zwischenablage kopieren
               📐 Strg + 0: Originalgröße einstellen und kopieren
               📐 Strg + 1~7: 400~1600 px einstellen und kopieren
-              💾 Strg + S: JPG auf dem Desktop speichern
+              💾 Strg + S: JPG/PNG im ausgewählten Ordner speichern
               Esc: Aktuelles Fenster schließen
               Strg + Esc: Alle Fenster schließen
             
@@ -3329,8 +3840,9 @@ GetManualText(lang) {
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             • Bildgröße: Originalgröße oder 400~1600 px Breite
+            • Speicherprofil: PNG 100% oder JPG 90/80/70% mit Doc/Pic-Schätzwerten
             • Schwarze Bildkontur beim Kopieren/Speichern: Ein/Aus
-            • About-Tab: GitHub-Updates prüfen
+            • About-Tab: GitHub-Updates prüfen, herunterladen und installieren
             • Übersetzungs-Tastenkürzel: 5 Optionen
             • Übersetzungssprache: 49 europäische Sprachen
         )"
@@ -3374,7 +3886,7 @@ GetManualText(lang) {
               📋 Ctrl + C : copier dans le presse-papiers
               📐 Ctrl + 0 : taille originale et copie
               📐 Ctrl + 1~7 : régler 400~1600 px et copier
-              💾 Ctrl + S : enregistrer en JPG sur le Bureau
+              💾 Ctrl + S : enregistrer en JPG/PNG dans le dossier choisi
               Esc : fermer la fenêtre actuelle
               Ctrl + Esc : fermer toutes les fenêtres
             
@@ -3391,8 +3903,9 @@ GetManualText(lang) {
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             • Taille de l'image : originale ou largeur 400~1600 px
+            • Profil : PNG 100 % ou JPG 90/80/70 % avec estimations Doc/Pic
             • Contour noir à la copie/enregistrement : activé/désactivé
-            • Onglet About : vérifier les mises à jour GitHub
+            • Onglet About : vérifier, télécharger et installer les mises à jour GitHub
             • Raccourci de traduction : 5 options
             • Langue de traduction : 49 langues européennes
         )"
@@ -3436,7 +3949,7 @@ GetManualText(lang) {
               📋 Ctrl + C: copiar al portapapeles
               📐 Ctrl + 0: tamaño original y copiar
               📐 Ctrl + 1~7: ajustar 400~1600 px y copiar
-              💾 Ctrl + S: guardar JPG en el escritorio
+              💾 Ctrl + S: guardar JPG/PNG en la carpeta elegida
               Esc: cerrar ventana actual
               Ctrl + Esc: cerrar todas las ventanas
             
@@ -3453,8 +3966,9 @@ GetManualText(lang) {
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             • Tamaño de imagen: original o ancho 400~1600 px
+            • Perfil: PNG 100% o JPG 90/80/70% con estimaciones Doc/Pic
             • Contorno negro al copiar/guardar: activado/desactivado
-            • Pestaña About: buscar actualizaciones de GitHub
+            • Pestaña About: buscar, descargar e instalar actualizaciones de GitHub
             • Atajo de traducción: 5 opciones
             • Idioma de traducción: 49 idiomas europeos
         )"
@@ -3502,7 +4016,7 @@ GetManualText(lang) {
           📋 Ctrl + C: Copy image to clipboard
           📐 Ctrl + 0: Set Original Size and copy at original dimensions
           📐 Ctrl + 1~7: Set width to 400~1600 px and copy immediately
-          💾 Ctrl + S: Save a JPG to the save folder with current output settings (default: Desktop)
+          💾 Ctrl + S: Save a JPG/PNG to the selected folder with current output settings (default: Desktop)
           Esc: Close current capture window
           Ctrl + Esc: Close all capture windows
         
@@ -3519,9 +4033,10 @@ GetManualText(lang) {
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
         • Clipboard image size: Original Size or 400~1600 px width
+        • File-save preset: PNG (Doc/Pic 100%), JPG 90% (Doc 83%·Pic 70%), JPG 80% (65%·50%), JPG 70% (50%·35%)
         • Black outline for copied/saved images: On/Off
-        • Save folder (Ctrl+S): Choose the JPG save location on the General tab (default: Desktop)
-        • About tab: Check GitHub updates and open the release page
+        • Save folder (Ctrl+S): Choose the image save location on the General tab (default: Desktop)
+        • About tab: Check GitHub, download a verified EXE, install, and restart
         • Translation hotkey: 5 options available
         • Translation language: 49 European languages supported
     )"

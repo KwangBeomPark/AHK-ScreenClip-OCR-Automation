@@ -37,7 +37,7 @@ It is designed especially for finance, accounting, sales administration, credit 
 
 ### 📥 For General Users (One-Click Portable Download)
 
-1. Go to the **[Releases](https://github.com/KwangBeomPark/ClipOCR-Pro/releases)** tab on the right side of the GitHub repository.
+1. Go to the **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** tab on the right side of the GitHub repository.
 2. Download the latest **`ClipOCR-Pro.zip`** or standalone **`ClipOCR-Pro.exe`** file.
 3. Unzip the file if needed, then double-click **`ClipOCR-Pro.exe`**.
 4. An icon will appear in the Windows system tray, and ClipOCR-Pro is ready to use.
@@ -92,7 +92,8 @@ If no release file is available yet, please build or run the source using AutoHo
 | `Ctrl + C` on floating window | Copy the floating image |
 | `Ctrl + 0` on floating window | Save Original Size as the default and immediately copy the current image at its original dimensions |
 | `Ctrl + 1` through `Ctrl + 7` on floating window | Set width from 400 to 1600 px and immediately copy the current image |
-| `Ctrl + S` on floating window | Save a JPG to the configured save folder (default: Desktop) using the current width and outline settings |
+| `Ctrl + S` on floating window | Save a JPG or PNG to the configured folder using the current width, format, quality, and outline settings |
+| Right-click → `Image Quality & Size` | Choose PNG or a JPG 90/80/70 preset and remember the last selection across restarts |
 | `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | Red box, yellow highlight, green highlight, undo |
 | Right-click menu → Arrow / Number Pin / Mosaic | Draw a directional arrow, stamp auto-incrementing numbered pins, or pixelate an area to mask sensitive information |
 | `Ctrl + ↑`, `Ctrl + ↓`, `Ctrl + ←`, `Ctrl + Esc` on floating window | Minimize, restore original size, align left, close all |
@@ -107,9 +108,9 @@ ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 HKCU\Software\ScreenClipTool
 ```
 
-Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. Clipboard copies remain Windows bitmaps for broad paste compatibility; the tooltip size is an estimate for a JPG saved at quality 85.
+Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), one file-save preset, copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. The settings screen and right-click menu share one preset list: `PNG lossless (Doc/Pic 100%)`, `JPG 90% (Doc 83% · Pic 70%)`, `JPG 80% (Doc 65% · Pic 50%)`, and `JPG 70% (Doc 50% · Pic 35%)`. The last selection is stored in the Registry. Ratios are quick planning estimates and vary by image content; the tooltip estimates the selected format's actual size.
 
-Opening the About tab checks the latest GitHub release. `View Update` is enabled only when a newer version exists; it opens the matching GitHub Release page without downloading or installing anything.
+Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page.
 
 Recommended portable deployment structure:
 
