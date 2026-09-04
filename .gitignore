@@ -1,6 +1,8 @@
 # Compiled binaries (Recommended to upload to GitHub Releases instead of tracking in Git)
 *.exe
 *.zip
+*.cer
+*.pfx
 dist/
 build/
 release/
@@ -25,3 +27,6 @@ $RECYCLE.BIN/
 # Local AI working notes
 AGENTS.md
 myAGENT.md
+
+# Enterprise configuration is maintained only in ../00_Registry
+ENTERPRISE_SUITE_REGISTRY_SPEC.md
