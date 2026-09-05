@@ -37,7 +37,7 @@ if ($appVersion.Success -and $fileVersion.Success) {
 }
 
 foreach ($include in @("SuiteRegistry.ahk", "OcrService.ahk", "HealthCheck.ahk")) {
-    Assert-Project ($main -match "(?m)^#Include $([regex]::Escape($include))$") "Missing module include: $include"
+    Assert-Project ($main -match "(?m)^#Include $([regex]::Escape($include))\r?$") "Missing module include: $include"
 }
 
 $menuNumbers = @([regex]::Matches($main, '(?m)^ClipMenu\.Add\("[^"]*? (\d+)\.') |
