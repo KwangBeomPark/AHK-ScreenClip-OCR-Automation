@@ -25,6 +25,7 @@ It is designed especially for finance, accounting, sales administration, credit 
 - **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, arrows, numbered pins, text notes, and mosaic masking for sensitive information.
 - **🌐 Selected Text Translation**: Translate selected text using the configured translation workflow.
 - **🖼️ Image Translation Workflow**: Send captured images to Google Image Translation when needed for email attachments, scanned documents, and overseas evidence.
+- **🔤 Local OCR**: Extract text from a floating capture without uploading the image. Auto mode uses Windows OCR first and an approved portable Tesseract runtime when available.
 - **📐 Image Resize & Copy**: Resize captured images to a configured width from 400 to 1600 px before pasting them into documents, emails, or reports.
 - **📧 Outlook Web Mail Estimate**: Estimate the attachment-free message size in MB from copied body data plus conservative subject, header, and encoding allowances.
 - **🖥️ Multi-Monitor Support**: Use capture and floating windows across multi-monitor office environments.
@@ -38,7 +39,7 @@ It is designed especially for finance, accounting, sales administration, credit 
 ### 📥 For General Users (One-Click Portable Download)
 
 1. Go to the **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** tab on the right side of the GitHub repository.
-2. Download the latest **`ClipOCR-Pro.zip`** or standalone **`ClipOCR-Pro.exe`** file.
+2. Download the latest Light **`ClipOCR-Pro.vX.Y.Z.zip`** or standalone EXE. Company deployments that need Korean OCR without a Windows Korean language pack can use **`App03_ClipOCR-Pro_vX.Y.Z-Full.zip`** when provided by their administrator.
 3. Unzip the file if needed, then double-click **`ClipOCR-Pro.exe`**.
 4. An icon will appear in the Windows system tray, and ClipOCR-Pro is ready to use.
 
@@ -50,6 +51,8 @@ If no release file is available yet, please build or run the source using AutoHo
 2. Clone this repository and customize the source as needed.
 3. Run `./scripts/build.ps1`. It performs source and compiled health checks, then writes the EXE, ZIP, SHA-256 list, and build manifest to `dist/`. It never commits, pushes, tags, or publishes.
 4. Maintainers publish only through `./scripts/publish.ps1` after committing a clean `main` branch. The command prompts before pushing and creating an immutable GitHub release and refuses to replace an existing version.
+
+`./scripts/build.ps1 -TesseractDirectory C:\Approved\Tesseract` additionally creates the Full ZIP after verifying `tesseract.exe`, `tessdata\kor.traineddata`, and `tessdata\eng.traineddata`. The repository and Light build never bundle or download an unofficial OCR binary. See [OCR packaging](docs/OCR_PACKAGING.md).
 
 Optional Authenticode signing uses `CLIPOCR_SIGN_CERT_PATH` for a private-key PFX, `CLIPOCR_SIGN_CERT_PASSWORD` for its password, and optional `CLIPOCR_TIMESTAMP_SERVER`. Public `.cer` files cannot sign executables. Publishing requires a signature unless the maintainer explicitly passes `-AllowUnsigned`.
 
@@ -90,6 +93,7 @@ Optional Authenticode signing uses `CLIPOCR_SIGN_CERT_PATH` for a private-key PF
 | `Win + CapsLock` | Translate selected text using the configured Google Translate workflow |
 | `Ctrl + Win + 0` inside an Outlook web mail body | Show a conservative attachment-free body and subject/header estimate in MB |
 | Right-click on floating window | Open image translation, annotation, copy/save, and window management menu |
+| Right-click → `Extract Text (Local OCR)` | Extract text locally and open a copyable result window; no translation consent or external upload is involved |
 | Double-click on floating window | Minimize or restore the floating image |
 | `Ctrl + C` on floating window | Copy the floating image |
 | `Ctrl + 0` on floating window | Save Original Size as the default and immediately copy the current image at its original dimensions |
@@ -110,7 +114,7 @@ ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 HKCU\Software\ScreenClipTool
 ```
 
-Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), automatic clipboard copy for new captures, one file-save preset, copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. The settings screen and right-click menu share one preset list: `PNG lossless (Doc/Pic 100%)`, `JPG 90% (Doc 83% · Pic 70%)`, `JPG 80% (Doc 65% · Pic 50%)`, and `JPG 70% (Doc 50% · Pic 35%)`. The last selection is stored in the Registry. Ratios are quick planning estimates and vary by image content; the tooltip estimates the selected format's actual size.
+Current settings include clipboard image size, automatic clipboard copy, file-save preset, image outline, save folder, translation options, local OCR engine/languages, UI language, and the one-time translation consent flag. Auto OCR defaults to `ko-KR,en-US`: it tries an installed matching Windows OCR language first, then portable Tesseract, then another requested Windows language. App-local settings always take precedence over managed Suite defaults.
 
 When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 
@@ -121,7 +125,13 @@ Every push and pull request also runs the Windows build workflow with checksum-p
 Recommended portable deployment structure:
 
 ```text
+Light: ClipOCR-Pro.exe
+
+Full:
 ClipOCR-Pro.exe
+ocr\tesseract.exe
+ocr\tessdata\kor.traineddata
+ocr\tessdata\eng.traineddata
 ```
 
 If a team needs shared defaults, deploy the separate `PL_Suite` registry contract according to company policy. Do not copy personal consent or runtime data into the managed defaults.
@@ -131,6 +141,7 @@ If a team needs shared defaults, deploy the separate `PL_Suite` registry contrac
 ## 🔐 Security & Privacy
 
 - ClipOCR-Pro runs locally on Windows.
+- Local OCR input and output stay on the PC. Windows OCR requires a matching installed Windows language; the Full package provides the approved `kor+eng` portable fallback for locked-down English Windows PCs.
 - Local capture, annotation, copy, save, and resize actions are handled on the user's PC.
 - Outlook web mail estimates are calculated only from the local clipboard and do not send message content externally. Actual sent size may differ.
 - When translation features are used, selected text or images may be processed through external translation services such as Google Translate, depending on the configured workflow.

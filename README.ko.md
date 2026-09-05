@@ -25,6 +25,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 - **🖍️ 빠른 주석 표시**: 캡처 이미지에 박스, 형광펜, 화살표, 번호 핀, 텍스트 주석을 추가하고, 모자이크로 민감정보를 가릴 수 있습니다.
 - **🌐 선택 텍스트 번역**: 선택한 텍스트를 설정된 번역 워크플로우로 빠르게 번역합니다.
 - **🖼️ 이미지 번역 워크플로우**: 메일 첨부 이미지, 스캔 문서, 해외 증빙을 Google 이미지 번역 방식으로 확인할 수 있습니다.
+- **🔤 로컬 OCR**: 캡처 이미지를 외부로 전송하지 않고 글자를 추출합니다. Auto 모드는 Windows OCR을 먼저 사용하고, 사용 가능한 경우 승인된 포터블 Tesseract로 보완합니다.
 - **📐 이미지 리사이즈 및 복사**: 캡처 이미지를 설정한 가로 400~1600px에 맞춘 뒤 문서, 이메일, 보고서에 붙여 넣을 수 있습니다.
 - **📧 Outlook 웹메일 용량 추정**: 작성 본문의 클립보드 데이터에 제목·헤더·인코딩 여유분을 더해 첨부 제외 예상 크기를 MB로 표시합니다.
 - **🖥️ 다중 모니터 지원**: 여러 모니터를 사용하는 사무 환경에서도 캡처와 플로팅 창을 활용할 수 있습니다.
@@ -38,7 +39,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 ### 📥 일반 팀원용 원클릭 다운로드
 
 1. 깃허브 화면 우측의 **[Releases](https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases)** 탭으로 이동합니다.
-2. 최신 릴리즈의 **`ClipOCR-Pro.zip`** 또는 **`ClipOCR-Pro.exe`** 단독 실행 파일을 다운로드합니다.
+2. 최신 Light **`ClipOCR-Pro.vX.Y.Z.zip`** 또는 단독 EXE를 다운로드합니다. Windows 한글 언어 팩이 없는 회사 PC에서 한글 OCR이 필요하면 관리자가 제공한 **`App03_ClipOCR-Pro_vX.Y.Z-Full.zip`**을 사용합니다.
 3. 필요한 경우 압축을 풀고 **`ClipOCR-Pro.exe`**를 더블 클릭합니다.
 4. Windows 시스템 트레이에 아이콘이 표시되면 바로 사용할 수 있습니다.
 
@@ -50,6 +51,8 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 2. 이 저장소를 Clone하고 필요한 소스를 수정합니다.
 3. `./scripts/build.ps1`을 실행합니다. 소스와 컴파일 EXE 자체 진단 후 `dist/`에 EXE, ZIP, SHA-256 목록, 빌드 매니페스트를 만듭니다. 이 명령은 커밋·푸시·태그·릴리즈를 수행하지 않습니다.
 4. 유지관리자는 변경을 커밋하고 깨끗한 `main` 브랜치에서만 `./scripts/publish.ps1`로 배포합니다. 푸시와 변경 불가능한 GitHub 릴리즈 생성 직전에 확인하며 기존 버전을 덮어쓰지 않습니다.
+
+`./scripts/build.ps1 -TesseractDirectory C:\Approved\Tesseract`를 실행하면 `tesseract.exe`, `tessdata\kor.traineddata`, `tessdata\eng.traineddata`를 검증한 뒤 Full ZIP도 만듭니다. 저장소와 Light 빌드는 출처가 검증되지 않은 OCR 실행 파일을 내려받거나 포함하지 않습니다. 자세한 내용은 [OCR 패키징 안내](docs/OCR_PACKAGING.md)를 참고하세요.
 
 선택형 Authenticode 서명은 개인키가 포함된 PFX 경로를 `CLIPOCR_SIGN_CERT_PATH`, 암호를 `CLIPOCR_SIGN_CERT_PASSWORD`, 선택형 타임스탬프 주소를 `CLIPOCR_TIMESTAMP_SERVER`에 지정합니다. 공개키뿐인 `.cer` 파일은 서명에 사용할 수 없습니다. 서명 없는 배포는 유지관리자가 `-AllowUnsigned`를 명시해야만 허용됩니다.
 
@@ -90,6 +93,7 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 | `Win + CapsLock` | 선택한 텍스트를 설정된 Google 번역 워크플로우로 번역 |
 | Outlook 웹메일 본문에서 `Ctrl + Win + 0` | 본문과 제목·헤더를 포함한 첨부 제외 보수적 예상 크기를 MB로 표시 |
 | 플로팅 창에서 마우스 오른쪽 클릭 | 이미지 번역, 주석, 복사/저장, 창 관리 메뉴 열기 |
+| 우클릭 → `Extract Text (Local OCR)` | 이미지를 외부로 보내지 않고 텍스트를 추출해 복사 가능한 결과 창으로 표시 |
 | 플로팅 창에서 더블 클릭 | 플로팅 이미지 최소화 또는 복원 |
 | 플로팅 창에서 `Ctrl + C` | 플로팅 이미지 복사 |
 | 플로팅 창에서 `Ctrl + 0` | Original Size를 기본값으로 저장하고 현재 이미지를 원본 크기로 즉시 복사 |
@@ -110,7 +114,7 @@ ClipOCR-Pro 설정값은 Windows 사용자별 Registry에 저장됩니다.
 HKCU\Software\ScreenClipTool
 ```
 
-현재 저장되는 주요 값은 클립보드 이미지 크기(Original Size 또는 가로 400~1600px), 새 캡처 자동 클립보드 복사 여부, 파일 저장 프리셋, 복사/저장 이미지 아웃라인 여부, `Ctrl + S` 저장 폴더(기본: 바탕화면), 선택 텍스트 번역 언어, 번역 단축키, 이미지 번역 메뉴 언어, 매뉴얼/UI 언어, 번역 최초 1회 동의 여부입니다. 파일 저장 프리셋은 `PNG 무손실(Doc/Pic 100%)`, `JPG 90%(Doc 83%·Pic 70%)`, `JPG 80%(Doc 65%·Pic 50%)`, `JPG 70%(Doc 50%·Pic 35%)`를 설정창과 우클릭 메뉴의 한 목록에서 선택하며 마지막 값이 Registry에 저장됩니다. 비율은 빠른 계획용 예상치이며 실제 이미지 구성에 따라 달라집니다. 클립보드는 원본 화질의 Windows 비트맵으로 유지되고, 툴팁은 실제 선택 형식으로 계산한 예상 용량을 표시합니다.
+현재 저장되는 주요 값은 클립보드 이미지 크기, 새 캡처 자동 복사, 파일 저장 프리셋, 이미지 테두리, 저장 폴더, 번역 옵션, 로컬 OCR 엔진/언어, UI 언어, 번역 최초 1회 동의 여부입니다. OCR 기본값은 `Auto`, `ko-KR,en-US`이며 설치된 Windows OCR 언어 → 포터블 Tesseract → 다른 요청 Windows 언어 순으로 시도합니다. 앱 로컬 설정은 관리형 Suite 기본값보다 항상 우선합니다.
 
 관리자가 선택형 `PL_Suite\ClipOCR` 연동을 활성화하면 캡처 동작과 사용자가 `Ctrl + S`로 명시 저장할 때의 기본 폴더를 중앙값에서 읽을 수 있습니다. 위 앱 전용 경로에 기존 값이 있으면 항상 우선하며, 앱은 Suite 레지스트리에 쓰지 않습니다. 번역 동의는 계속 앱 전용 경로에만 남고 중앙 폴더로 캡처를 자동 저장하지 않습니다.
 
@@ -118,10 +122,16 @@ HKCU\Software\ScreenClipTool
 
 모든 push와 pull request는 해시가 고정된 공식 AutoHotkey/Ahk2Exe 도구로 Windows 빌드를 수행합니다. CI는 시험 산출물만 제공하며 릴리즈 쓰기 권한은 없습니다.
 
-권장 포터블 배포 구조는 아래처럼 단순하게 유지합니다.
+권장 포터블 배포 구조:
 
 ```text
+Light: ClipOCR-Pro.exe
+
+Full:
 ClipOCR-Pro.exe
+ocr\tesseract.exe
+ocr\tessdata\kor.traineddata
+ocr\tessdata\eng.traineddata
 ```
 
 팀 단위 공통 기본값은 별도의 `PL_Suite` 레지스트리 계약으로 배포합니다. 개인 번역 동의나 실행 중 데이터는 중앙 기본값에 포함하지 않습니다.
@@ -131,6 +141,7 @@ ClipOCR-Pro.exe
 ## 🔐 보안 및 개인정보
 
 - ClipOCR-Pro는 Windows 로컬 환경에서 실행됩니다.
+- 로컬 OCR의 입력 이미지와 결과는 PC 밖으로 전송되지 않습니다. Windows OCR은 해당 Windows 언어가 설치되어 있어야 하며, Full 패키지는 한글 팩 설치가 제한된 영문 Windows PC를 위해 승인된 `kor+eng` 포터블 대체 엔진을 제공합니다.
 - 로컬 캡처, 주석 표시, 복사, 저장, 리사이즈 기능은 사용자 PC에서 처리됩니다.
 - Outlook 웹메일 용량 추정은 로컬 클립보드에서만 계산하며 메일 내용을 외부로 전송하지 않습니다. 실제 발송 크기와는 차이가 있을 수 있습니다.
 - 번역 기능을 사용할 경우, 설정된 방식에 따라 선택 텍스트나 이미지가 Google Translate 등 외부 번역 서비스에서 처리될 수 있습니다.

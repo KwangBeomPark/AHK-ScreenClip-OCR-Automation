@@ -5,6 +5,7 @@ param(
     [string]$CompilerPath = $env:AHK2EXE_PATH,
     [string]$CertificatePath = $env:CLIPOCR_SIGN_CERT_PATH,
     [string]$TimestampServer = $env:CLIPOCR_TIMESTAMP_SERVER,
+    [string]$TesseractDirectory = $env:CLIPOCR_TESSERACT_DIR,
     [switch]$IncludeEnterpriseAliases
 )
 
@@ -66,7 +67,28 @@ $exePath = Join-Path $outputRoot "$baseName.exe"
 $zipPath = Join-Path $outputRoot "$baseName.zip"
 $manifestPath = Join-Path $outputRoot "build-manifest.json"
 $checksumsPath = Join-Path $outputRoot "SHA256SUMS.txt"
+$fullZipPath = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version-Full.zip"
+$portableOcrRoot = $null
+if (-not [string]::IsNullOrWhiteSpace($TesseractDirectory)) {
+    $portableOcrRoot = if ([IO.Path]::IsPathRooted($TesseractDirectory)) {
+        [IO.Path]::GetFullPath($TesseractDirectory)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $repoRoot $TesseractDirectory))
+    }
+    foreach ($requiredPath in @(
+        (Join-Path $portableOcrRoot "tesseract.exe"),
+        (Join-Path $portableOcrRoot "tessdata\kor.traineddata"),
+        (Join-Path $portableOcrRoot "tessdata\eng.traineddata")
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Full OCR package requires an approved portable Tesseract runtime with kor and eng data: $requiredPath"
+        }
+    }
+}
 $targetArtifacts = @($exePath, $zipPath, $manifestPath, $checksumsPath)
+if ($null -ne $portableOcrRoot) {
+    $targetArtifacts += $fullZipPath
+}
 if ($IncludeEnterpriseAliases) {
     $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
     $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
@@ -140,6 +162,23 @@ if ($IncludeEnterpriseAliases) {
     $artifactPaths.Add($enterpriseExe)
     $artifactPaths.Add($enterpriseZip)
 }
+if ($null -ne $portableOcrRoot) {
+    $fullStage = Join-Path $outputRoot ".full-stage-$([Diagnostics.Process]::GetCurrentProcess().Id)"
+    if (Test-Path -LiteralPath $fullStage) {
+        Remove-Item -LiteralPath $fullStage -Recurse -Force
+    }
+    try {
+        New-Item -ItemType Directory -Path $fullStage | Out-Null
+        Copy-Item -LiteralPath $exePath -Destination (Join-Path $fullStage "ClipOCR-Pro.exe")
+        Copy-Item -LiteralPath $portableOcrRoot -Destination (Join-Path $fullStage "ocr") -Recurse
+        Compress-Archive -Path (Join-Path $fullStage "*") -DestinationPath $fullZipPath -CompressionLevel Optimal
+        $artifactPaths.Add($fullZipPath)
+    } finally {
+        if (Test-Path -LiteralPath $fullStage) {
+            Remove-Item -LiteralPath $fullStage -Recurse -Force
+        }
+    }
+}
 
 Write-Host "[5/5] Writing checksums and build manifest..."
 $artifactInfo = foreach ($path in $artifactPaths) {
@@ -171,6 +210,7 @@ $manifest = [ordered]@{
     builtAtUtc      = [DateTime]::UtcNow.ToString("o")
     signed          = $signed
     signatureStatus = $signatureStatus
+    fullOcrPackage  = ($null -ne $portableOcrRoot)
     artifacts       = @($artifactInfo)
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM

@@ -4,6 +4,7 @@
 ;@Ahk2Exe-SetVersion 1.4.0.0
 #Include Gdip_All.ahk
 #Include SuiteRegistry.ahk
+#Include OcrService.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
@@ -40,6 +41,21 @@ PrepareBundledGithubIcon() {
         FileInstall("..\assets\github_icon.png", APP_TEMP_DIR "\github_icon.png", 1)
         if FileExist(APP_TEMP_DIR "\github_icon.png")
             return APP_TEMP_DIR "\github_icon.png"
+    }
+    return ""
+}
+
+PrepareWindowsOcrHelper() {
+    global APP_TEMP_DIR
+    sourceHelper := A_ScriptDir "\..\scripts\Invoke-WindowsOcr.ps1"
+    if (!A_IsCompiled && FileExist(sourceHelper))
+        return sourceHelper
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        targetHelper := APP_TEMP_DIR "\Invoke-WindowsOcr.ps1"
+        FileInstall("..\scripts\Invoke-WindowsOcr.ps1", APP_TEMP_DIR "\Invoke-WindowsOcr.ps1", 1)
+        return FileExist(targetHelper) ? targetHelper : ""
     }
     return ""
 }
@@ -94,10 +110,13 @@ global SAVE_FOLDER := "" ; Ctrl+S save destination; empty means Desktop (backwar
 global SAVE_FOLDER_SOURCE := "desktop"
 global AUTO_CLIPBOARD := true
 global CAPTURE_HOTKEY := "#LButton"
+global OCR_ENGINE := "auto"
+global OCR_LANGUAGES := "ko-KR,en-US"
 
 ; ── Runtime state ──
 global TRAY_TEXT_TRANSLATE_ITEM := ""
 global TextTranslatePopupHwnd := 0
+global OcrResultPopupHwnd := 0
 global DashboardHwnd := 0
 global ManualHwnd := 0
 global ANNOTATION_MODE := ""
@@ -202,6 +221,38 @@ if !localCaptureFound
 captureHotkeyValue := localCaptureFound ? localCaptureHotkey : (suiteCaptureFound ? suiteCaptureHotkey : "Win+Drag")
 CAPTURE_HOTKEY := NormalizeCaptureHotkey(captureHotkeyValue)
 
+localOcrEngineFound := TryReadLocalSetting("OcrEngine", &localOcrEngine)
+suiteOcrEngineFound := false
+suiteOcrEngine := ""
+if !localOcrEngineFound
+    suiteOcrEngineFound := Suite_TryGetAppSetting("ClipOCR", "OcrEngine", &suiteOcrEngine)
+OCR_ENGINE := NormalizeOcrEngine(localOcrEngineFound ? localOcrEngine : (suiteOcrEngineFound ? suiteOcrEngine : "auto"))
+
+localOcrLanguagesFound := TryReadLocalSetting("OcrLanguages", &localOcrLanguages)
+suiteOcrLanguagesFound := false
+suiteOcrLanguages := ""
+if !localOcrLanguagesFound
+    suiteOcrLanguagesFound := Suite_TryGetAppSetting("ClipOCR", "OcrLanguages", &suiteOcrLanguages)
+OCR_LANGUAGES := NormalizeOcrLanguages(localOcrLanguagesFound ? localOcrLanguages
+    : (suiteOcrLanguagesFound ? suiteOcrLanguages : "ko-KR,en-US"))
+
+; Support/QA entry point for testing the exact source and compiled OCR paths without UI automation.
+if (A_Args.Length > 1 && A_Args[1] == "--ocr-file") {
+    cliLanguages := A_Args.Length > 2 ? A_Args[3] : OCR_LANGUAGES
+    cliEngine := A_Args.Length > 3 ? A_Args[4] : OCR_ENGINE
+    cliResult := RunLocalOcr(A_Args[2], cliEngine, cliLanguages)
+    cliOutput := cliResult.ok ? "OK|" cliResult.engine "|" cliResult.language "`r`n" cliResult.text
+        : "ERROR|" cliResult.error "`r`n"
+    cliOutputPath := Trim(EnvGet("CLIPOCR_OCR_OUTPUT"))
+    if (cliOutputPath != "") {
+        try FileDelete(cliOutputPath)
+        FileAppend(cliOutput, cliOutputPath, "UTF-8")
+    }
+    if cliResult.ok
+        ExitApp(0)
+    ExitApp(2)
+}
+
 ; ── System tray icon and menu customization ──
 try {
     if FileExist(APP_ICON_PATH)
@@ -290,24 +341,25 @@ UpdateImageTranslateMenu() {
 UpdateImageTranslateMenu()
 
 ClipMenu.Add("🌐 1. Google Translate (Image)", ImgTransMenu)
+ClipMenu.Add("🔤 2. Extract Text (Local OCR)", ExtractTextFromRightClickedClip)
 ClipMenu.Add() ; Separator
 
-ClipMenu.Add("🟥 2. Red Box (Shift+Drag)", MenuHandler)
-ClipMenu.Add("🟨 3. Yellow Highlight (Ctrl+Drag)", MenuHandler)
-ClipMenu.Add("🟩 4. Green Highlight (Alt+Drag)", MenuHandler)
-ClipMenu.Add("➡️ 5. Arrow (Drag)", MenuHandler)
-ClipMenu.Add("🔢 6. Number Pin (Click)", MenuHandler)
-ClipMenu.Add("🌫️ 7. Mosaic (Drag)", MenuHandler)
-ClipMenu.Add("✍️ 8. Text Markup (Shift+Ctrl+Click)", MenuHandler)
-ClipMenu.Add("↩️ 9. Undo Draw (Ctrl+Z)", MenuHandler)
+ClipMenu.Add("🟥 3. Red Box (Shift+Drag)", MenuHandler)
+ClipMenu.Add("🟨 4. Yellow Highlight (Ctrl+Drag)", MenuHandler)
+ClipMenu.Add("🟩 5. Green Highlight (Alt+Drag)", MenuHandler)
+ClipMenu.Add("➡️ 6. Arrow (Drag)", MenuHandler)
+ClipMenu.Add("🔢 7. Number Pin (Click)", MenuHandler)
+ClipMenu.Add("🌫️ 8. Mosaic (Drag)", MenuHandler)
+ClipMenu.Add("✍️ 9. Text Markup (Shift+Ctrl+Click)", MenuHandler)
+ClipMenu.Add("↩️ 10. Undo Draw (Ctrl+Z)", MenuHandler)
 ClipMenu.Add() ; Separator
 
-ClipMenu.Add("📋 10. Copy to Clipboard (Ctrl+C)", MenuHandler)
-ClipMenu.Add("💾 11. Save to File (Ctrl+S)", MenuHandler)
-ClipMenu.Add("🎨 12. Copy To Paint", MenuHandler)
+ClipMenu.Add("📋 11. Copy to Clipboard (Ctrl+C)", MenuHandler)
+ClipMenu.Add("💾 12. Save to File (Ctrl+S)", MenuHandler)
+ClipMenu.Add("🎨 13. Copy To Paint", MenuHandler)
 ClipMenu.Add() ; Separator
 
-; 13. Clipboard width submenu
+; 14. Clipboard width submenu
 WidthMenu := Menu()
 WidthMenu.Add("Original Size (Ctrl+0)", (*) => SetClipWidth(0))
 WidthMenu.Add()
@@ -320,20 +372,20 @@ WidthMenu.Add("1400 px (Ctrl+6)", (*) => SetClipWidth(1400))
 WidthMenu.Add("1600 px (Ctrl+7)", (*) => SetClipWidth(1600))
 UpdateWidthMenu()
 
-ClipMenu.Add("⚙️ 13. Clipboard Width", WidthMenu)
+ClipMenu.Add("⚙️ 14. Clipboard Width", WidthMenu)
 
-; 14. Persisted image format/quality preset submenu
+; 15. Persisted image format/quality preset submenu
 global ImagePresetMenu := Menu()
 for presetIndex, preset in GetImageSavePresetOptions()
     ImagePresetMenu.Add(preset.label, BindImageSavePreset(presetIndex))
 UpdateImageSavePresetMenu()
-ClipMenu.Add("🖼️ 14. Image Quality && Size", ImagePresetMenu)
+ClipMenu.Add("🖼️ 15. Image Quality && Size", ImagePresetMenu)
 ClipMenu.Add() ; Separator
-ClipMenu.Add("📐 15. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
-ClipMenu.Add("🔽 16. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
-ClipMenu.Add("🔼 17. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
-ClipMenu.Add("❌ 18. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
-ClipMenu.Add("⚙️ 19. Preferences & About", (*) => ShowDashboardDialog())
+ClipMenu.Add("📐 16. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
+ClipMenu.Add("🔽 17. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
+ClipMenu.Add("🔼 18. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
+ClipMenu.Add("❌ 19. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
+ClipMenu.Add("⚙️ 20. Preferences & About", (*) => ShowDashboardDialog())
 
 ; ── Startup welcome tooltip ──
 ToolTip(UIText("startup_ready", Map("app", APP_NAME, "hotkey", GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY))))
@@ -731,6 +783,18 @@ SetAutoClipboard(enabled) {
     global AUTO_CLIPBOARD, REG_PATH
     AUTO_CLIPBOARD := !!enabled
     return SafeRegWriteString(AUTO_CLIPBOARD ? 1 : 0, REG_PATH, "AutoClipboard")
+}
+
+SetOcrEngine(engine) {
+    global OCR_ENGINE, REG_PATH
+    OCR_ENGINE := NormalizeOcrEngine(engine)
+    return SafeRegWriteString(OCR_ENGINE, REG_PATH, "OcrEngine")
+}
+
+SetOcrLanguages(languages) {
+    global OCR_LANGUAGES, REG_PATH
+    OCR_LANGUAGES := NormalizeOcrLanguages(languages)
+    return SafeRegWriteString(OCR_LANGUAGES, REG_PATH, "OcrLanguages")
 }
 
 SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
@@ -2079,6 +2143,111 @@ CopyBitmapToPaint(pBitmap) {
     }
 }
 
+CreateOcrInputBitmap(pBitmap, maxDimension := 2200) {
+    if !pBitmap
+        return 0
+    sourceW := Gdip_GetImageWidth(pBitmap)
+    sourceH := Gdip_GetImageHeight(pBitmap)
+    if (sourceW < 1 || sourceH < 1)
+        return 0
+    if (sourceW <= maxDimension && sourceH <= maxDimension)
+        return Gdip_CloneBitmapArea(pBitmap, 0, 0, sourceW, sourceH)
+
+    scale := Min(maxDimension / sourceW, maxDimension / sourceH)
+    outputW := Max(1, Round(sourceW * scale))
+    outputH := Max(1, Round(sourceH * scale))
+    output := Gdip_CreateBitmap(outputW, outputH)
+    if !output
+        return 0
+    graphics := Gdip_GraphicsFromImage(output)
+    if !graphics {
+        Gdip_DisposeImage(output)
+        return 0
+    }
+    try {
+        Gdip_SetInterpolationMode(graphics, 7)
+        if (Gdip_DrawImage(graphics, pBitmap, 0, 0, outputW, outputH, 0, 0, sourceW, sourceH) != 0)
+            throw Error("Could not resize OCR input")
+        return output
+    } catch {
+        Gdip_DisposeImage(output)
+        return 0
+    } finally {
+        Gdip_DeleteGraphics(graphics)
+    }
+}
+
+ExtractTextFromRightClickedClip(*) {
+    global RightClickedHwnd, ClipWins, APP_TEMP_DIR, OCR_ENGINE, OCR_LANGUAGES
+    if !ClipWins.Has(RightClickedHwnd)
+        return
+    inputBitmap := 0
+    imagePath := APP_TEMP_DIR "\ocr_input_" DllCall("GetCurrentProcessId") "_" A_TickCount ".png"
+    try {
+        if !DirExist(APP_TEMP_DIR)
+            DirCreate(APP_TEMP_DIR)
+        inputBitmap := CreateOcrInputBitmap(ClipWins[RightClickedHwnd].pBitmap)
+        if !inputBitmap || !SafeSaveBitmapToFile(inputBitmap, imagePath)
+            throw Error("Could not prepare the captured image for OCR.")
+        ToolTip("🔤 Extracting text locally…")
+        result := RunLocalOcr(imagePath, OCR_ENGINE, OCR_LANGUAGES)
+        ToolTip()
+        if !result.ok
+            throw Error(result.error)
+        ShowOcrResultPopup(result.text, result.engine, result.language, result.error)
+    } catch as e {
+        ToolTip("⚠️ Local OCR failed: " ShortErrorMessage(e.Message, 180))
+        SetTimer(() => ToolTip(), -4500)
+    } finally {
+        if inputBitmap
+            Gdip_DisposeImage(inputBitmap)
+        try FileDelete(imagePath)
+    }
+}
+
+ShowOcrResultPopup(text, engine, language, warning := "") {
+    global OcrResultPopupHwnd, APP_NAME
+    if (OcrResultPopupHwnd && WinExist("ahk_id " OcrResultPopupHwnd))
+        try WinClose("ahk_id " OcrResultPopupHwnd)
+
+    resultGui := Gui("+AlwaysOnTop +Resize +MinSize520x320", APP_NAME " — Local OCR")
+    resultGui.SetFont("s9", "Segoe UI")
+    resultGui.Add("Text", "xm ym w620 h24", "🔤 Local text extraction")
+    details := engine (language != "" ? " · " language : "")
+    if (warning != "")
+        details .= " · " warning
+    resultGui.Add("Text", "xm y+4 w620 h32 c666666", details)
+    resultEdit := resultGui.Add("Edit", "xm y+6 w620 h300 ReadOnly Multi WantTab", text)
+    copyBtn := resultGui.Add("Button", "xm y+10 w110 h30 Default", "Copy Text")
+    closeBtn := resultGui.Add("Button", "x+10 yp w90 h30", "Close")
+
+    CopyResult(*) {
+        A_Clipboard := resultEdit.Value
+        ToolTip("✅ OCR text copied.")
+        SetTimer(() => ToolTip(), -1500)
+    }
+    DestroyResult(*) {
+        global OcrResultPopupHwnd
+        OcrResultPopupHwnd := 0
+        resultGui.Destroy()
+    }
+    ResizeResult(guiObj, minMax, width, height) {
+        if (minMax == -1)
+            return
+        resultEdit.Move(, , Max(300, width - 30), Max(150, height - 115))
+        copyBtn.Move(, height - 42)
+        closeBtn.Move(, height - 42)
+    }
+
+    copyBtn.OnEvent("Click", CopyResult)
+    closeBtn.OnEvent("Click", DestroyResult)
+    resultGui.OnEvent("Close", DestroyResult)
+    resultGui.OnEvent("Escape", DestroyResult)
+    resultGui.OnEvent("Size", ResizeResult)
+    resultGui.Show("w650 h430")
+    OcrResultPopupHwnd := resultGui.Hwnd
+}
+
 SCW_Undo(targetHwnd := 0) {
     hwnd := targetHwnd ? targetHwnd : WinExist("A")
     if !ClipWins.Has(hwnd)
@@ -2111,9 +2280,9 @@ WM_RBUTTONDOWN(wParam, lParam, msg, hwnd) {
     global RightClickedHwnd := hwnd
 
     if (ClipWins[hwnd].UndoStack.Length > 0)
-        ClipMenu.Enable("↩️ 9. Undo Draw (Ctrl+Z)")
+        ClipMenu.Enable("↩️ 10. Undo Draw (Ctrl+Z)")
     else
-        ClipMenu.Disable("↩️ 9. Undo Draw (Ctrl+Z)")
+        ClipMenu.Disable("↩️ 10. Undo Draw (Ctrl+Z)")
 
     ClipMenu.Show()
 }
@@ -3036,6 +3205,30 @@ RunInternalHealthCheck() {
         "capture hotkey validation")
     Check(IsTextTranslateHotkeySupported("#CapsLock") && IsTextTranslateHotkeySupported("^!CapsLock"),
         "translation hotkey validation")
+    Check(NormalizeOcrEngine("WINDOWS") == "windows" && NormalizeOcrEngine("unknown") == "auto",
+        "OCR engine normalization")
+    Check(NormalizeOcrLanguages("ko_kr;EN-us;ko-KR") == "ko-KR,en-US"
+        && NormalizeOcrLanguages("invalid") == "ko-KR,en-US", "OCR language normalization")
+    Check(GetTesseractLanguageCode("ko-KR") == "kor" && GetTesseractLanguageCode("en-US") == "eng",
+        "Tesseract language mapping")
+    Check(FileExist(PrepareWindowsOcrHelper()), "embedded Windows OCR helper")
+
+    tessFixtureRoot := A_Temp "\clipocr_tessdata_" DllCall("GetCurrentProcessId")
+    try {
+        DirCreate(tessFixtureRoot)
+        FileAppend("fixture", tessFixtureRoot "\kor.traineddata", "UTF-8-RAW")
+        FileAppend("fixture", tessFixtureRoot "\eng.traineddata", "UTF-8-RAW")
+        resolvedTessFixture := ResolveTesseractLanguages("ko-KR,en-US,pl-PL", tessFixtureRoot)
+        Check(resolvedTessFixture.value == "kor+eng" && resolvedTessFixture.missing.Length == 1,
+            "Tesseract language data resolution")
+    } catch as e {
+        errors.Push("Tesseract fixtures: " ShortErrorMessage(e.Message))
+    } finally {
+        try {
+            if DirExist(tessFixtureRoot)
+                DirDelete(tessFixtureRoot, true)
+        }
+    }
 
     saveFixtureRoot := A_Temp "\clipocr_settings_" DllCall("GetCurrentProcessId")
     localSaveFixture := saveFixtureRoot "\local"
@@ -3171,7 +3364,8 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
 }
 
 SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk, FontSizeEdit, HotkeyCombo,
-    LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder) {
+    LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder, OcrEngineCombo, initialOcrEngine,
+    OcrLanguagesEdit, initialOcrLanguages) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     settingsSaved := true
 
@@ -3182,6 +3376,17 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
 
     if !SetAutoClipboard(AutoClipboardChk.Value)
         settingsSaved := false
+
+    selectedOcrEngine := GetOcrEngineByLabel(OcrEngineCombo.Text)
+    if (selectedOcrEngine != initialOcrEngine) {
+        if !SetOcrEngine(selectedOcrEngine)
+            settingsSaved := false
+    }
+    normalizedOcrLanguages := NormalizeOcrLanguages(OcrLanguagesEdit.Value)
+    if (normalizedOcrLanguages != initialOcrLanguages) {
+        if !SetOcrLanguages(normalizedOcrLanguages)
+            settingsSaved := false
+    }
 
     if StartupChk.Value {
         if !EnableStartup()
@@ -3230,7 +3435,7 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipb
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, AUTO_CLIPBOARD, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, AUTO_CLIPBOARD, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, OCR_ENGINE, OCR_LANGUAGES, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -3432,6 +3637,19 @@ ShowDashboardDialog() {
     UpBtn.OnEvent("Click", MoveItemUp)
     DownBtn.OnEvent("Click", MoveItemDown)
 
+    TrnPanel.Push(DashGui.Add("Text", "x180 y416 w580 h1 Background3F3F46", ""))
+    ocrTitle := DashGui.Add("Text", "x180 y426 w580 h22 +BackgroundTrans cFFFFFF", "Local OCR (no external upload)")
+    ocrTitle.SetFont("s10 Bold")
+    TrnPanel.Push(ocrTitle)
+    TrnPanel.Push(DashGui.Add("Text", "x180 y456 w90 h22 +BackgroundTrans cCCCCCC", "Engine"))
+    initialOcrEngine := OCR_ENGINE
+    OcrEngineCombo := DashGui.Add("DropDownList", "x270 y452 w260 Choose" GetOcrEngineIndex(OCR_ENGINE), GetOcrEngineLabels())
+    TrnPanel.Push(OcrEngineCombo)
+    TrnPanel.Push(DashGui.Add("Text", "x540 y456 w75 h22 +BackgroundTrans cCCCCCC", "Languages"))
+    initialOcrLanguages := OCR_LANGUAGES
+    OcrLanguagesEdit := DashGui.Add("Edit", "x615 y452 w145 h24", OCR_LANGUAGES)
+    TrnPanel.Push(OcrLanguagesEdit)
+
     ; 3. About Panel
     AbtPanel := []
     lbl5 := DashGui.Add("Text", "x180 y60 w430 h25 +BackgroundTrans cWhite", APP_NAME)
@@ -3511,7 +3729,8 @@ ShowDashboardDialog() {
 
     SaveAllSettings(*) {
         settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk,
-            FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder)
+            FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder,
+            OcrEngineCombo, initialOcrEngine, OcrLanguagesEdit, initialOcrLanguages)
         if settingsSaved
             ToolTip("✅ All settings saved.")
         else
