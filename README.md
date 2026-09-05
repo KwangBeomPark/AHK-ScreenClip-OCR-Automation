@@ -84,7 +84,7 @@ If no release file is available yet, please build or run the source using AutoHo
 
 | Shortcut | Function |
 |---------|----------|
-| `Win + Drag` | Capture a screen area and keep it floating on top |
+| `Win + Drag` | Capture a screen area and keep it floating on top; automatic clipboard copy follows the General setting |
 | `Win + CapsLock` | Translate selected text using the configured Google Translate workflow |
 | `Ctrl + Win + 0` inside an Outlook web mail body | Show a conservative attachment-free body and subject/header estimate in MB |
 | Right-click on floating window | Open image translation, annotation, copy/save, and window management menu |
@@ -108,7 +108,9 @@ ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 HKCU\Software\ScreenClipTool
 ```
 
-Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), one file-save preset, copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. The settings screen and right-click menu share one preset list: `PNG lossless (Doc/Pic 100%)`, `JPG 90% (Doc 83% · Pic 70%)`, `JPG 80% (Doc 65% · Pic 50%)`, and `JPG 70% (Doc 50% · Pic 35%)`. The last selection is stored in the Registry. Ratios are quick planning estimates and vary by image content; the tooltip estimates the selected format's actual size.
+Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), automatic clipboard copy for new captures, one file-save preset, copied/saved image outline, the `Ctrl + S` save folder (default: Desktop), selected-text translation language, translation hotkey, image translation menu languages, the manual/UI language, and the one-time translation consent flag. The settings screen and right-click menu share one preset list: `PNG lossless (Doc/Pic 100%)`, `JPG 90% (Doc 83% · Pic 70%)`, `JPG 80% (Doc 65% · Pic 50%)`, and `JPG 70% (Doc 50% · Pic 35%)`. The last selection is stored in the Registry. Ratios are quick planning estimates and vary by image content; the tooltip estimates the selected format's actual size.
+
+When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 
 Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page.
 
@@ -118,7 +120,7 @@ Recommended portable deployment structure:
 ClipOCR-Pro.exe
 ```
 
-If a team needs shared defaults, export and distribute the values under the Registry path above according to company policy.
+If a team needs shared defaults, deploy the separate `PL_Suite` registry contract according to company policy. Do not copy personal consent or runtime data into the managed defaults.
 
 ---
 

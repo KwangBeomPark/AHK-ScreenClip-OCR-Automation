@@ -3,6 +3,7 @@
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
 ;@Ahk2Exe-SetVersion 1.4.0.0
 #Include Gdip_All.ahk
+#Include SuiteRegistry.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
@@ -90,6 +91,9 @@ global IMAGE_TRANSLATE_LANGS := "ko,en,pl"
 global MANUAL_LANG := GetDefaultUILang() ; Also used as the general UI language for core tooltips
 global TRANSLATE_CONSENT := false ; One-time consent before sending data to external translation services
 global SAVE_FOLDER := "" ; Ctrl+S save destination; empty means Desktop (backward compatible)
+global SAVE_FOLDER_SOURCE := "desktop"
+global AUTO_CLIPBOARD := true
+global CAPTURE_HOTKEY := "#LButton"
 
 ; ── Runtime state ──
 global TRAY_TEXT_TRANSLATE_ITEM := ""
@@ -168,18 +172,35 @@ try {
 }
 
 try {
+    ; Privacy invariant: consent is app-owned and is never read from or written to PL_Suite.
     TRANSLATE_CONSENT := (Trim(String(RegRead(REG_PATH, "TranslateConsent"))) == "1")
 } catch {
     TRANSLATE_CONSENT := false
 }
 
-try {
-    savedFolder := Trim(String(RegRead(REG_PATH, "SaveFolder")))
-    if (savedFolder != "" && DirExist(savedFolder))
-        SAVE_FOLDER := savedFolder
-} catch {
-    SAVE_FOLDER := ""
-}
+localSaveFound := TryReadLocalSetting("SaveFolder", &localSaveFolder)
+suiteSaveFound := false
+suiteSaveFolder := ""
+if !localSaveFound
+    suiteSaveFound := Suite_TryGetCommonSetting("ClipOCR", "CaptureOutputDir", &suiteSaveFolder)
+resolvedSaveFolder := ResolveSaveFolderSetting(localSaveFound, localSaveFolder, suiteSaveFound, suiteSaveFolder)
+SAVE_FOLDER := resolvedSaveFolder.folder
+SAVE_FOLDER_SOURCE := resolvedSaveFolder.source
+
+localAutoFound := TryReadLocalSetting("AutoClipboard", &localAutoClipboard)
+suiteAutoFound := false
+suiteAutoClipboard := ""
+if !localAutoFound
+    suiteAutoFound := Suite_TryGetAppSetting("ClipOCR", "AutoClipboard", &suiteAutoClipboard)
+AUTO_CLIPBOARD := ResolveBooleanSetting(localAutoFound, localAutoClipboard, suiteAutoFound, suiteAutoClipboard, true)
+
+localCaptureFound := TryReadLocalSetting("CaptureHotkey", &localCaptureHotkey)
+suiteCaptureFound := false
+suiteCaptureHotkey := ""
+if !localCaptureFound
+    suiteCaptureFound := Suite_TryGetAppSetting("ClipOCR", "CaptureHotkey", &suiteCaptureHotkey)
+captureHotkeyValue := localCaptureFound ? localCaptureHotkey : (suiteCaptureFound ? suiteCaptureHotkey : "Win+Drag")
+CAPTURE_HOTKEY := NormalizeCaptureHotkey(captureHotkeyValue)
 
 ; ── System tray icon and menu customization ──
 try {
@@ -195,7 +216,7 @@ try {
 A_IconTip := APP_NAME
 Tray := A_TrayMenu
 Tray.Delete()
-Tray.Add("📸 Capture (Win+Drag)", (*) => ScreenClip2Win(1))
+Tray.Add("📸 Capture (Win+Drag)", StartConfiguredCapture)
 TRAY_TEXT_TRANSLATE_ITEM := "🌐 Translate Selected Text (" GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY) ")"
 Tray.Add(TRAY_TEXT_TRANSLATE_ITEM, (*) => TranslateSelectedText(true))
 Tray.Add("⚙️ Preferences & About", (*) => ShowDashboardDialog())
@@ -319,6 +340,7 @@ ToolTip(UIText("startup_ready", Map("app", APP_NAME, "hotkey", GetTextTranslateH
 SetTimer(() => ToolTip(), -4000)
 
 SetTimer(TrackLastTextSourceWindow, 250)
+ApplyCaptureHotkey()
 ApplyTextTranslateHotkey()
 
 ; Optional support/QA entry point: open the settings window directly.
@@ -331,8 +353,6 @@ OnMessage(0x0203, WM_LBUTTONDOWN)     ; WM_LBUTTONDBLCLK (double click)
 OnMessage(0x0204, WM_RBUTTONDOWN)     ; WM_RBUTTONDOWN (right click)
 
 ; Hotkeys
-#LButton:: ScreenClip2Win(1)  ; Win+LButton -> floating clip + auto copy to clipboard
-#CapsLock:: TranslateSelectedText(false) ; Default selected-text translation hotkey
 $^#0:: EstimateOutlookWebMailSize()
 
 #HotIf WinActive("ScreenClippingWindow ahk_class AutoHotkeyGUI")
@@ -353,6 +373,23 @@ $^#0:: EstimateOutlookWebMailSize()
 Esc:: SCW_CloseWin()
 ^Esc:: SCW_CloseAll() ; Ctrl+Esc -> close all
 #HotIf
+
+StartConfiguredCapture(*) {
+    global AUTO_CLIPBOARD
+    ScreenClip2Win(AUTO_CLIPBOARD ? 1 : 0)
+}
+
+ApplyCaptureHotkey() {
+    global CAPTURE_HOTKEY
+    try {
+        Hotkey(CAPTURE_HOTKEY, StartConfiguredCapture, "On")
+        return true
+    } catch as e {
+        ToolTip("⚠️ 캡처 단축키 설정 실패: " e.Message)
+        SetTimer(() => ToolTip(), -3000)
+        return false
+    }
+}
 
 /**
  * 지정한 화면 영역을 캡처하여 항상-위 플로팅 이미지 창을 생성하는 핵심 함수
@@ -653,7 +690,22 @@ GetUniqueFilePath(dir, baseName, ext) {
     }
 }
 
-; ── Ctrl+S save destination (falls back to Desktop when unset or missing) ──
+; ── Ctrl+S save destination (local explicit value, then Suite default, then Desktop) ──
+ResolveSaveFolderSetting(localFound, localValue, suiteFound, suiteValue) {
+    if localFound {
+        localPath := Trim(String(localValue))
+        ; Blank or invalid local values deliberately fall back to Desktop, never to Suite.
+        return { folder: (localPath != "" && DirExist(localPath)) ? localPath : "", source: "local" }
+    }
+
+    if suiteFound {
+        suitePath := Trim(String(suiteValue))
+        if (suitePath != "" && DirExist(suitePath))
+            return { folder: suitePath, source: "suite" }
+    }
+    return { folder: "", source: "desktop" }
+}
+
 GetSaveFolder() {
     global SAVE_FOLDER
     if (SAVE_FOLDER != "" && DirExist(SAVE_FOLDER))
@@ -662,14 +714,23 @@ GetSaveFolder() {
 }
 
 SetSaveFolder(folder) {
-    global SAVE_FOLDER, REG_PATH
+    global SAVE_FOLDER, SAVE_FOLDER_SOURCE, REG_PATH
     folder := Trim(String(folder))
     ; Store the Desktop path as empty so the default keeps following the user's Desktop.
     if (folder == "" || folder == A_Desktop)
         SAVE_FOLDER := ""
     else
         SAVE_FOLDER := folder
-    return SafeRegWriteString(SAVE_FOLDER, REG_PATH, "SaveFolder")
+    if !SafeRegWriteString(SAVE_FOLDER, REG_PATH, "SaveFolder")
+        return false
+    SAVE_FOLDER_SOURCE := "local"
+    return true
+}
+
+SetAutoClipboard(enabled) {
+    global AUTO_CLIPBOARD, REG_PATH
+    AUTO_CLIPBOARD := !!enabled
+    return SafeRegWriteString(AUTO_CLIPBOARD ? 1 : 0, REG_PATH, "AutoClipboard")
 }
 
 SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
@@ -726,6 +787,17 @@ SafeRegWriteString(value, regPath, valueName) {
         RegWrite(String(value), "REG_SZ", regPath, valueName)
         return true
     } catch {
+        return false
+    }
+}
+
+TryReadLocalSetting(valueName, &value) {
+    global REG_PATH
+    try {
+        value := RegRead(REG_PATH, valueName)
+        return true
+    } catch {
+        value := ""
         return false
     }
 }
@@ -1077,6 +1149,7 @@ EnsureTranslationConsent() {
         return false
 
     TRANSLATE_CONSENT := true
+    ; Privacy invariant: consent remains in the app-owned registry path, never PL_Suite.
     SafeRegWriteString(1, REG_PATH, "TranslateConsent")
     return true
 }
@@ -2427,16 +2500,19 @@ GetTextTranslateHotkeyByLabel(label) {
     return "#CapsLock"
 }
 
+RunTextTranslateHotkey(*) {
+    TranslateSelectedText(false)
+}
+
 ApplyTextTranslateHotkey() {
     global TEXT_TRANSLATE_HOTKEY
-    ; Win+CapsLock is always registered as a static hotkey, so add only user-selected alternatives.
-    if (TEXT_TRANSLATE_HOTKEY == "#CapsLock")
-        return
     try {
-        Hotkey(TEXT_TRANSLATE_HOTKEY, (*) => TranslateSelectedText(false), "On")
+        Hotkey(TEXT_TRANSLATE_HOTKEY, RunTextTranslateHotkey, "On")
+        return true
     } catch as e {
         ToolTip("⚠️ 번역 단축키 설정 실패: " e.Message)
         SetTimer(() => ToolTip(), -3000)
+        return false
     }
 }
 
@@ -2447,10 +2523,13 @@ SetTextTranslateHotkey(hotkey) {
 
     oldHotkey := TEXT_TRANSLATE_HOTKEY
     if (oldHotkey != hotkey) {
-        if (oldHotkey != "#CapsLock")
-            try Hotkey(oldHotkey, "Off")
+        try Hotkey(oldHotkey, "Off")
         TEXT_TRANSLATE_HOTKEY := hotkey
-        ApplyTextTranslateHotkey()
+        if !ApplyTextTranslateHotkey() {
+            TEXT_TRANSLATE_HOTKEY := oldHotkey
+            try Hotkey(oldHotkey, RunTextTranslateHotkey, "On")
+            return false
+        }
     }
 
     saved := SafeRegWriteString(hotkey, REG_PATH, "TranslateHotkey")
@@ -2947,6 +3026,43 @@ RunInternalHealthCheck() {
     presetFixture := GetImageSavePresetOptions()
     Check(presetFixture.Length == 4 && GetImageSavePresetIndex("png", 90) == 1
         && GetImageSavePresetIndex("jpg", 80) == 3, "image save presets")
+    Check(NormalizeSuiteBoolean("True", false) && !NormalizeSuiteBoolean("0", true)
+        && NormalizeSuiteBoolean("invalid", true), "Suite boolean normalization")
+    Check(!ResolveBooleanSetting(true, "0", true, "True", true)
+        && !ResolveBooleanSetting(false, "", true, "False", true)
+        && ResolveBooleanSetting(false, "", false, "", true), "local and Suite boolean precedence")
+    Check(IsCaptureHotkeySupported("Win+Drag") && IsCaptureHotkeySupported("#LButton")
+        && !IsCaptureHotkeySupported("Alt+F4") && NormalizeCaptureHotkey("Alt+F4") == "#LButton",
+        "capture hotkey validation")
+    Check(IsTextTranslateHotkeySupported("#CapsLock") && IsTextTranslateHotkeySupported("^!CapsLock"),
+        "translation hotkey validation")
+
+    saveFixtureRoot := A_Temp "\clipocr_settings_" DllCall("GetCurrentProcessId")
+    localSaveFixture := saveFixtureRoot "\local"
+    suiteSaveFixture := saveFixtureRoot "\suite"
+    try {
+        DirCreate(localSaveFixture)
+        DirCreate(suiteSaveFixture)
+        saveResolution := ResolveSaveFolderSetting(true, localSaveFixture, true, suiteSaveFixture)
+        Check(saveResolution.folder == localSaveFixture && saveResolution.source == "local",
+            "explicit save folder precedence")
+        saveResolution := ResolveSaveFolderSetting(false, "", true, suiteSaveFixture)
+        Check(saveResolution.folder == suiteSaveFixture && saveResolution.source == "suite",
+            "Suite save folder fallback")
+        saveResolution := ResolveSaveFolderSetting(true, "", true, suiteSaveFixture)
+        Check(saveResolution.folder == "" && saveResolution.source == "local",
+            "explicit Desktop save preference")
+        saveResolution := ResolveSaveFolderSetting(false, "", false, "")
+        Check(saveResolution.folder == "" && saveResolution.source == "desktop",
+            "Desktop save fallback")
+    } catch as e {
+        errors.Push("save folder fixtures: " ShortErrorMessage(e.Message))
+    } finally {
+        try {
+            if DirExist(saveFixtureRoot)
+                DirDelete(saveFixtureRoot, true)
+        }
+    }
 
     fixtureHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     fixtureJson := '{"tag_name":"v9.8.7","name":"Release v9.8.7","html_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/tag/v9.8.7","assets":[{"name":"ClipOCR-Pro.v9.8.7.exe","size":1569280,"digest":"sha256:'
@@ -3054,12 +3170,17 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs,
-    SaveFolderEdit) {
+SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk, FontSizeEdit, HotkeyCombo,
+    LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     settingsSaved := true
 
-    if !SetSaveFolder(SaveFolderEdit.Value)
+    if (StrLower(Trim(SaveFolderEdit.Value)) != StrLower(Trim(initialSaveFolder))) {
+        if !SetSaveFolder(SaveFolderEdit.Value)
+            settingsSaved := false
+    }
+
+    if !SetAutoClipboard(AutoClipboardChk.Value)
         settingsSaved := false
 
     if StartupChk.Value {
@@ -3109,7 +3230,7 @@ SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, FontSizeE
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, AUTO_CLIPBOARD, SAVE_IMAGE_FORMAT, JPG_QUALITY, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath, ENABLE_BMC_AUTO_DOWNLOAD
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -3169,9 +3290,12 @@ ShowDashboardDialog() {
         JPG_QUALITY), GetImageSavePresetLabels())
     GenPanel.Push(PresetCombo)
 
-    OutlineChk := DashGui.Add("CheckBox", "x180 y162 w580 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
-        " Add 1px black outline to copied/saved image")
+    OutlineChk := DashGui.Add("CheckBox", "x180 y162 w285 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
+        " Add 1px black outline")
     GenPanel.Push(OutlineChk)
+    AutoClipboardChk := DashGui.Add("CheckBox", "x470 y162 w290 h28 Background1E1E24 cCCCCCC" (AUTO_CLIPBOARD ? " Checked" : ""),
+        " Auto-copy new captures")
+    GenPanel.Push(AutoClipboardChk)
 
     GenPanel.Push(DashGui.Add("Text", "x180 y200 w580 h1 Background3F3F46", ""))
 
@@ -3201,7 +3325,8 @@ ShowDashboardDialog() {
     lblSave.SetFont("s10 Bold")
     GenPanel.Push(lblSave)
     GenPanel.Push(DashGui.Add("Text", "x180 y442 w110 h22 +BackgroundTrans cCCCCCC", "Save Folder"))
-    SaveFolderEdit := DashGui.Add("Edit", "x295 y438 w305 h24 ReadOnly", GetSaveFolder())
+    initialSaveFolder := GetSaveFolder()
+    SaveFolderEdit := DashGui.Add("Edit", "x295 y438 w305 h24 ReadOnly", initialSaveFolder)
     GenPanel.Push(SaveFolderEdit)
     BrowseSaveBtn := DashGui.Add("Button", "x610 y437 w150 h26", "📁 Browse…")
     GenPanel.Push(BrowseSaveBtn)
@@ -3385,8 +3510,8 @@ ShowDashboardDialog() {
     CancelBtn := DashGui.Add("Button", "x660 y525 w100 h32", "Cancel")
 
     SaveAllSettings(*) {
-        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, FontSizeEdit, HotkeyCombo,
-            LangCombo, LV_ImageLangs, SaveFolderEdit)
+        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, PresetCombo, OutlineChk, AutoClipboardChk,
+            FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs, SaveFolderEdit, initialSaveFolder)
         if settingsSaved
             ToolTip("✅ All settings saved.")
         else
