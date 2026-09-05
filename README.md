@@ -46,10 +46,12 @@ If no release file is available yet, please build or run the source using AutoHo
 
 ### 🛠️ For Power Users & Developers (Custom Build)
 
-1. Install [AutoHotkey v2](https://www.autohotkey.com/).
-2. Clone this repository.
-3. Customize `src/ClipOCR-Pro.ahk` as needed.
-4. Use Ahk2Exe to package your own `ClipOCR-Pro.exe`. The source includes `assets/ClipOCR-Pro.ico`, and the Ahk2Exe directive embeds it as the executable icon.
+1. Install [AutoHotkey v2](https://www.autohotkey.com/) with Ahk2Exe.
+2. Clone this repository and customize the source as needed.
+3. Run `./scripts/build.ps1`. It performs source and compiled health checks, then writes the EXE, ZIP, SHA-256 list, and build manifest to `dist/`. It never commits, pushes, tags, or publishes.
+4. Maintainers publish only through `./scripts/publish.ps1` after committing a clean `main` branch. The command prompts before pushing and creating an immutable GitHub release and refuses to replace an existing version.
+
+Optional Authenticode signing uses `CLIPOCR_SIGN_CERT_PATH` for a private-key PFX, `CLIPOCR_SIGN_CERT_PASSWORD` for its password, and optional `CLIPOCR_TIMESTAMP_SERVER`. Public `.cer` files cannot sign executables. Publishing requires a signature unless the maintainer explicitly passes `-AllowUnsigned`.
 
 ---
 
@@ -113,6 +115,8 @@ Current settings include clipboard image size (Original Size or a width from 400
 When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipOCR-Pro can read managed defaults for capture behavior and the explicit `Ctrl + S` save folder. Existing values under the app-owned path above always win, and the Suite registry is never written by the app. Translation consent remains app-local. Managed folders are never used to save captures automatically.
 
 Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page.
+
+Every push and pull request also runs the Windows build workflow with checksum-pinned official AutoHotkey and Ahk2Exe tools. CI publishes test artifacts only; it has no release permission.
 
 Recommended portable deployment structure:
 

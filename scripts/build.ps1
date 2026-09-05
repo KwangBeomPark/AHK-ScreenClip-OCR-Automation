@@ -1,150 +1,179 @@
-# scripts/build.ps1
-# ClipOCR-Pro automated build, copy, and GitHub release upload script
+[CmdletBinding()]
+param(
+    [string]$OutputDirectory = "dist",
+    [string]$AutoHotkeyPath = $env:AUTOHOTKEY_EXE_PATH,
+    [string]$CompilerPath = $env:AHK2EXE_PATH,
+    [string]$CertificatePath = $env:CLIPOCR_SIGN_CERT_PATH,
+    [string]$TimestampServer = $env:CLIPOCR_TIMESTAMP_SERVER,
+    [switch]$IncludeEnterpriseAliases
+)
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
-# 1. Verify paths
-$ahkPath = "src/ClipOCR-Pro.ahk"
-if (-not (Test-Path $ahkPath)) {
-    Write-Error "Could not find src/ClipOCR-Pro.ahk"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$sourcePath = Join-Path $repoRoot "src\ClipOCR-Pro.ahk"
+$iconPath = Join-Path $repoRoot "assets\ClipOCR-Pro.ico"
+
+function Resolve-ExistingFile {
+    param([string]$ConfiguredPath, [string]$DefaultPath, [string]$Description)
+
+    $candidate = if ([string]::IsNullOrWhiteSpace($ConfiguredPath)) { $DefaultPath } else { $ConfiguredPath }
+    if (-not [IO.Path]::IsPathRooted($candidate)) {
+        $candidate = Join-Path $repoRoot $candidate
+    }
+    $candidate = [IO.Path]::GetFullPath($candidate)
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "$Description was not found: $candidate"
+    }
+    return $candidate
 }
 
-# 2. Extract version from script
-$ahkContent = Get-Content -Path $ahkPath -Raw
-if ($ahkContent -match 'global APP_VERSION\s*:=\s*"([^"]+)"') {
-    $version = $Matches[1]
-} else {
-    Write-Error "Could not find APP_VERSION in script."
-}
+function Invoke-CheckedProcess {
+    param([string]$FilePath, [string]$Arguments, [string]$Description)
 
-$expectedFileVersion = "$version.0"
-if ($ahkContent -notmatch ";@Ahk2Exe-SetVersion\s+$([regex]::Escape($expectedFileVersion))(?:\s|$)") {
-    Write-Error "APP_VERSION ($version) and Ahk2Exe file version ($expectedFileVersion) are not synchronized."
-}
-
-Write-Host "=========================================="
-Write-Host " ClipOCR-Pro Auto Build and Release Pipeline"
-Write-Host " Target Version: v$version"
-Write-Host "=========================================="
-
-# 3. Check GitHub CLI Auth
-Write-Host "[1/6] Checking GitHub CLI auth status..."
-$ghAuth = gh auth status 2>&1
-if ($LastExitCode -ne 0) {
-    Write-Error "GitHub CLI is not authenticated. Please run 'gh auth login' first."
-}
-Write-Host "GitHub CLI auth check succeeded."
-
-$tag = "v$version"
-$existingReleaseTags = gh release list --limit 1000 --json tagName | ConvertFrom-Json
-if ($LastExitCode -ne 0) {
-    Write-Error "Could not query existing GitHub releases."
-}
-if ($existingReleaseTags.tagName -contains $tag) {
-    Write-Error "Release $tag already exists. Bump APP_VERSION instead of replacing a published release."
-}
-
-# 4. Prepare release folder and clean old files
-$releaseDir = "release"
-if (-not (Test-Path $releaseDir)) {
-    New-Item -Path $releaseDir -ItemType Directory | Out-Null
-} else {
-    # Replace only artifacts for the target version; older builds may still be running.
-    $targetArtifacts = @(
-        "ClipOCR-Pro.v$version.exe",
-        "ClipOCR-Pro.v$version.zip",
-        "App03_ClipOCR-Pro_v$version.exe",
-        "App03_ClipOCR-Pro_v$version.zip"
-    )
-    foreach ($artifactName in $targetArtifacts) {
-        $artifactPath = Join-Path $releaseDir $artifactName
-        if (Test-Path -LiteralPath $artifactPath) {
-            Remove-Item -LiteralPath $artifactPath -Force
-        }
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+    if ($process.ExitCode -ne 0) {
+        throw "$Description failed with exit code $($process.ExitCode)."
     }
 }
 
-# 5. Compile AHK script
-$compilerPath = "C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe"
-$baseAhk = "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe"
-$iconPath = "assets\ClipOCR-Pro.ico"
-$outputExeName = "ClipOCR-Pro.v$version.exe"
-$outputExePath = Join-Path $releaseDir $outputExeName
-
-if (-not (Test-Path $compilerPath)) {
-    Write-Error "AutoHotkey compiler not found at $compilerPath"
+if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+    throw "Could not find the application source: $sourcePath"
 }
 
-# Resolve absolute paths to prevent any relative path resolution issues
-$absAhkPath = [System.IO.Path]::GetFullPath($ahkPath)
-$absOutPath = [System.IO.Path]::GetFullPath($outputExePath)
-$absIconPath = [System.IO.Path]::GetFullPath($iconPath)
-$absBaseAhk = [System.IO.Path]::GetFullPath($baseAhk)
-
-Write-Host "[2/6] Compiling AHK script..."
-$compileArguments = "/in `"$absAhkPath`" /out `"$absOutPath`" /icon `"$absIconPath`" /base `"$absBaseAhk`""
-$compileProcess = Start-Process -FilePath $compilerPath -ArgumentList $compileArguments -Wait -PassThru
-if ($compileProcess.ExitCode -ne 0) {
-    Write-Error "Ahk2Exe failed with exit code $($compileProcess.ExitCode)."
+$ahkExe = Resolve-ExistingFile $AutoHotkeyPath "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" "AutoHotkey v2 runtime"
+$ahk2Exe = Resolve-ExistingFile $CompilerPath "C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe" "Ahk2Exe compiler"
+$source = Get-Content -Raw -LiteralPath $sourcePath
+if ($source -notmatch 'global APP_VERSION\s*:=\s*"([^\"]+)"') {
+    throw "Could not find APP_VERSION in $sourcePath"
+}
+$version = $Matches[1]
+$expectedFileVersion = "$version.0"
+if ($source -notmatch ";@Ahk2Exe-SetVersion\s+$([regex]::Escape($expectedFileVersion))(?:\s|$)") {
+    throw "APP_VERSION ($version) and Ahk2Exe file version ($expectedFileVersion) are not synchronized."
 }
 
-if (-not (Test-Path $outputExePath)) {
-    Write-Error "Failed to generate compiled exe: $outputExePath"
-}
-$compiledFileVersion = (Get-Item -LiteralPath $outputExePath).VersionInfo.FileVersion
-if ($compiledFileVersion -ne $expectedFileVersion) {
-    Write-Error "Compiled EXE version ($compiledFileVersion) does not match expected version ($expectedFileVersion)."
-}
-
-$healthProcess = Start-Process -FilePath $outputExePath -ArgumentList "--health-check" -Wait -PassThru
-if ($healthProcess.ExitCode -ne 0) {
-    $healthLog = Join-Path $env:TEMP "ClipOCR-Pro\health-check.log"
-    Write-Error "Compiled EXE health check failed. See $healthLog"
-}
-Write-Host "Compilation and health check finished: $outputExeName"
-
-# 6. Compress to ZIP
-$outputZipName = "ClipOCR-Pro.v$version.zip"
-$outputZipPath = Join-Path $releaseDir $outputZipName
-
-if (Test-Path $outputZipPath) {
-    Remove-Item $outputZipPath -Force
-}
-
-Write-Host "[3/6] Compiling ZIP archive..."
-Compress-Archive -Path $outputExePath -DestinationPath $outputZipPath
-Write-Host "ZIP archive created: $outputZipName"
-
-# 7. Create corporate copy (App03_ClipOCR-Pro_v[Version])
-Write-Host "[4/6] Creating App03_ClipOCR-Pro_v$version copies..."
-$app03ExePath = Join-Path $releaseDir "App03_ClipOCR-Pro_v$version.exe"
-$app03ZipPath = Join-Path $releaseDir "App03_ClipOCR-Pro_v$version.zip"
-
-Copy-Item -Path $outputExePath -Destination $app03ExePath -Force
-Copy-Item -Path $outputZipPath -Destination $app03ZipPath -Force
-Write-Host "Corporate copy files created (App03_ClipOCR-Pro_v$version.exe and App03_ClipOCR-Pro_v$version.zip)"
-
-# 8. Git commit and push only project release inputs (never stage unrelated workspace files)
-Write-Host "[5/6] Committing and pushing release inputs..."
-$releaseInputs = @("src/ClipOCR-Pro.ahk", "src/Gdip_All.ahk", "scripts/build.ps1", "README.md", "README.ko.md", "assets")
-git add -- $releaseInputs
-$gitStatus = git status --porcelain -- $releaseInputs
-if ($gitStatus) {
-    git commit -m "Release v$version"
-    git push origin main
-    Write-Host "Git changes successfully pushed to origin."
+$outputRoot = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
+    [IO.Path]::GetFullPath($OutputDirectory)
 } else {
-    Write-Host "No changes to commit."
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
+}
+New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+
+$baseName = "ClipOCR-Pro.v$version"
+$exePath = Join-Path $outputRoot "$baseName.exe"
+$zipPath = Join-Path $outputRoot "$baseName.zip"
+$manifestPath = Join-Path $outputRoot "build-manifest.json"
+$checksumsPath = Join-Path $outputRoot "SHA256SUMS.txt"
+$targetArtifacts = @($exePath, $zipPath, $manifestPath, $checksumsPath)
+if ($IncludeEnterpriseAliases) {
+    $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
+    $targetArtifacts += Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
+}
+foreach ($target in $targetArtifacts) {
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        Remove-Item -LiteralPath $target -Force
+    }
 }
 
-# 9. Create an immutable GitHub release at the exact pushed commit
-Write-Host "[6/6] Creating GitHub Release and uploading assets..."
-$releaseTarget = (git rev-parse HEAD).Trim()
-Write-Host "Creating release $tag at commit $releaseTarget..."
-gh release create $tag $outputExePath $outputZipPath $app03ExePath $app03ZipPath --target $releaseTarget --title $tag --notes "Release $tag"
+Write-Host "[1/5] Running source health check..."
+Invoke-CheckedProcess $ahkExe "/ErrorStdOut `"$sourcePath`" --health-check" "Source health check"
 
-Write-Host "=========================================="
-Write-Host " Build and Release Pipeline completed successfully!"
-Write-Host "=========================================="
-Write-Host "Deployed files:"
-Get-ChildItem $releaseDir | Where-Object { $_.Name -match "v$version|App03" } | Select-Object Name, Length
+Write-Host "[2/5] Compiling $baseName.exe..."
+$compileArgs = "/in `"$sourcePath`" /out `"$exePath`" /icon `"$iconPath`" /base `"$ahkExe`" /silent verbose"
+Invoke-CheckedProcess $ahk2Exe $compileArgs "Ahk2Exe compilation"
+if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+    throw "Compiler did not create $exePath"
+}
+
+$compiledVersion = (Get-Item -LiteralPath $exePath).VersionInfo.FileVersion
+if ($compiledVersion -ne $expectedFileVersion) {
+    throw "Compiled EXE version ($compiledVersion) does not match $expectedFileVersion."
+}
+
+$signatureStatus = "NotSigned"
+$signed = $false
+if (-not [string]::IsNullOrWhiteSpace($CertificatePath)) {
+    Write-Host "[3/5] Signing executable..."
+    $certificateFile = Resolve-ExistingFile $CertificatePath $CertificatePath "Signing certificate"
+    $passwordText = $env:CLIPOCR_SIGN_CERT_PASSWORD
+    $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+        $certificateFile,
+        $(if ($null -eq $passwordText) { "" } else { $passwordText }),
+        $flags
+    )
+    if (-not $certificate.HasPrivateKey) {
+        throw "The configured certificate does not contain a private key. A .cer file cannot sign releases."
+    }
+    $signParams = @{
+        FilePath      = $exePath
+        Certificate   = $certificate
+        HashAlgorithm = "SHA256"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TimestampServer)) {
+        $signParams.TimestampServer = $TimestampServer
+    }
+    $signature = Set-AuthenticodeSignature @signParams
+    if ($null -eq $signature.SignerCertificate -or $signature.SignatureType -eq "None") {
+        throw "Authenticode signing did not produce a signature. Status: $($signature.Status)"
+    }
+    $signatureStatus = [string]$signature.Status
+    $signed = $true
+} else {
+    Write-Host "[3/5] Signing skipped (CLIPOCR_SIGN_CERT_PATH is not configured)."
+}
+
+Write-Host "[4/5] Running compiled health check and creating archives..."
+Invoke-CheckedProcess $exePath "--health-check" "Compiled health check"
+Compress-Archive -LiteralPath $exePath -DestinationPath $zipPath -CompressionLevel Optimal
+
+$artifactPaths = [System.Collections.Generic.List[string]]::new()
+$artifactPaths.Add($exePath)
+$artifactPaths.Add($zipPath)
+if ($IncludeEnterpriseAliases) {
+    $enterpriseExe = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.exe"
+    $enterpriseZip = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version.zip"
+    Copy-Item -LiteralPath $exePath -Destination $enterpriseExe
+    Copy-Item -LiteralPath $zipPath -Destination $enterpriseZip
+    $artifactPaths.Add($enterpriseExe)
+    $artifactPaths.Add($enterpriseZip)
+}
+
+Write-Host "[5/5] Writing checksums and build manifest..."
+$artifactInfo = foreach ($path in $artifactPaths) {
+    $item = Get-Item -LiteralPath $path
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    [pscustomobject]@{
+        name   = $item.Name
+        bytes  = $item.Length
+        sha256 = $hash
+    }
+}
+$checksumLines = $artifactInfo | ForEach-Object { "$($_.sha256)  $($_.name)" }
+Set-Content -LiteralPath $checksumsPath -Value $checksumLines -Encoding utf8NoBOM
+
+$commit = ""
+$workingTreeDirty = $false
+try {
+    $commit = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+    $workingTreeDirty = [bool](& git -C $repoRoot status --porcelain 2>$null)
+} catch {
+    $commit = ""
+}
+$manifest = [ordered]@{
+    application     = "ClipOCR-Pro"
+    version         = $version
+    fileVersion     = $expectedFileVersion
+    commit          = $commit
+    workingTreeDirty = $workingTreeDirty
+    builtAtUtc      = [DateTime]::UtcNow.ToString("o")
+    signed          = $signed
+    signatureStatus = $signatureStatus
+    artifacts       = @($artifactInfo)
+}
+$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+
+Write-Host "Build complete: $outputRoot"
+Write-Output $manifest

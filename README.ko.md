@@ -46,10 +46,12 @@ AutoHotkey v2 기반의 포터블 화면 캡처, OCR, 선택 텍스트 번역, �
 
 ### 🛠️ 파워 유저 및 개발자용 커스텀 빌드
 
-1. [AutoHotkey v2](https://www.autohotkey.com/)를 설치합니다.
-2. 이 저장소를 Clone합니다.
-3. `src/ClipOCR-Pro.ahk` 소스 코드를 필요에 맞게 수정합니다.
-4. Ahk2Exe로 본인만의 `ClipOCR-Pro.exe`를 패키징합니다. 저장소의 `assets/ClipOCR-Pro.ico`는 Ahk2Exe 지시문을 통해 실행 파일 아이콘으로 포함됩니다.
+1. Ahk2Exe가 포함된 [AutoHotkey v2](https://www.autohotkey.com/)를 설치합니다.
+2. 이 저장소를 Clone하고 필요한 소스를 수정합니다.
+3. `./scripts/build.ps1`을 실행합니다. 소스와 컴파일 EXE 자체 진단 후 `dist/`에 EXE, ZIP, SHA-256 목록, 빌드 매니페스트를 만듭니다. 이 명령은 커밋·푸시·태그·릴리즈를 수행하지 않습니다.
+4. 유지관리자는 변경을 커밋하고 깨끗한 `main` 브랜치에서만 `./scripts/publish.ps1`로 배포합니다. 푸시와 변경 불가능한 GitHub 릴리즈 생성 직전에 확인하며 기존 버전을 덮어쓰지 않습니다.
+
+선택형 Authenticode 서명은 개인키가 포함된 PFX 경로를 `CLIPOCR_SIGN_CERT_PATH`, 암호를 `CLIPOCR_SIGN_CERT_PASSWORD`, 선택형 타임스탬프 주소를 `CLIPOCR_TIMESTAMP_SERVER`에 지정합니다. 공개키뿐인 `.cer` 파일은 서명에 사용할 수 없습니다. 서명 없는 배포는 유지관리자가 `-AllowUnsigned`를 명시해야만 허용됩니다.
 
 ---
 
@@ -113,6 +115,8 @@ HKCU\Software\ScreenClipTool
 관리자가 선택형 `PL_Suite\ClipOCR` 연동을 활성화하면 캡처 동작과 사용자가 `Ctrl + S`로 명시 저장할 때의 기본 폴더를 중앙값에서 읽을 수 있습니다. 위 앱 전용 경로에 기존 값이 있으면 항상 우선하며, 앱은 Suite 레지스트리에 쓰지 않습니다. 번역 동의는 계속 앱 전용 경로에만 남고 중앙 폴더로 캡처를 자동 저장하지 않습니다.
 
 설정창 About 탭을 열면 GitHub 최신 릴리즈를 확인합니다. 새 버전이 있을 때만 `Download & Update` 버튼이 활성화됩니다. 사용자가 확인하면 공식 EXE를 임시 폴더에 다운로드하고, GitHub가 제공하는 파일 크기와 SHA-256 해시 및 실행 파일 버전을 검증한 뒤 현재 앱을 교체하고 재실행합니다. 업데이트 전에는 열려 있는 캡처 창을 저장하거나 복사해야 합니다. 소스 코드로 실행 중이거나 검증 가능한 EXE 자산이 없으면 릴리즈 페이지만 엽니다.
+
+모든 push와 pull request는 해시가 고정된 공식 AutoHotkey/Ahk2Exe 도구로 Windows 빌드를 수행합니다. CI는 시험 산출물만 제공하며 릴리즈 쓰기 권한은 없습니다.
 
 권장 포터블 배포 구조는 아래처럼 단순하게 유지합니다.
 

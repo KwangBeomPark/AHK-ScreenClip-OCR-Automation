@@ -1,0 +1,60 @@
+name: Build and health check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Download verified AutoHotkey build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $toolRoot = Join-Path $env:RUNNER_TEMP "clipocr-tools"
+          New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
+
+          $ahkZip = Join-Path $toolRoot "AutoHotkey_2.0.27.zip"
+          Invoke-WebRequest "https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.27/AutoHotkey_2.0.27.zip" -OutFile $ahkZip
+          if ((Get-FileHash $ahkZip -Algorithm SHA256).Hash -ne "F72CAD4B98A7B5AA050B35D6DEAA0B0E3949929B2AAFF7D0D69858F1F380B3EF") {
+            throw "AutoHotkey archive checksum mismatch."
+          }
+          $ahkRoot = Join-Path $toolRoot "AutoHotkey"
+          Expand-Archive -LiteralPath $ahkZip -DestinationPath $ahkRoot
+
+          $compilerZip = Join-Path $toolRoot "Ahk2Exe1.1.37.02a2.zip"
+          Invoke-WebRequest "https://github.com/AutoHotkey/Ahk2Exe/releases/download/Ahk2Exe1.1.37.02a2/Ahk2Exe1.1.37.02a2.zip" -OutFile $compilerZip
+          if ((Get-FileHash $compilerZip -Algorithm SHA256).Hash -ne "C29B8C3A5124850D79FC9E66E2CA79677C377D7F31631AD3022BA159C5D9E3BE") {
+            throw "Ahk2Exe archive checksum mismatch."
+          }
+          $compilerRoot = Join-Path $ahkRoot "Compiler"
+          Expand-Archive -LiteralPath $compilerZip -DestinationPath $compilerRoot
+          $compiler = Join-Path $compilerRoot "Ahk2Exe.exe"
+          if ((Get-FileHash $compiler -Algorithm SHA256).Hash -ne "E54A599B19BAA5C1688849BBAE7A9CF049EEFCCD4F704C67941B40DA13A625B2") {
+            throw "Extracted Ahk2Exe checksum mismatch."
+          }
+
+          "AUTOHOTKEY_EXE_PATH=$(Join-Path $ahkRoot 'AutoHotkey64.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AHK2EXE_PATH=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and test
+        shell: pwsh
+        run: ./scripts/build.ps1 -OutputDirectory dist
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ClipOCR-Pro-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
