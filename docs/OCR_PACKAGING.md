@@ -30,7 +30,7 @@ The build does not fetch OCR binaries. Obtain and approve a portable Windows Tes
 .\scripts\build.ps1 -TesseractDirectory C:\Approved\Tesseract
 ```
 
-The build rejects a Full package unless `tesseract.exe`, Korean data, and English data are present. It copies the complete approved runtime so its required DLLs are preserved. The resulting `App03_ClipOCR-Pro_vX.Y.Z-Full.zip` is checksummed in `SHA256SUMS.txt` and listed in the build manifest.
+The build rejects a Full package unless `tesseract.exe`, Korean data, and English data are present and the runtime successfully reports both `kor` and `eng`. It copies the complete approved runtime so its required DLLs are preserved. The resulting `App03_ClipOCR-Pro_vX.Y.Z-Full.zip` is checksummed in `SHA256SUMS.txt` and listed in the build manifest together with the detected Tesseract version.
 
 ## Privacy boundary
 

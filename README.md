@@ -120,7 +120,7 @@ When an administrator enables the optional `PL_Suite\ClipOCR` integration, ClipO
 
 Opening the About tab checks the latest GitHub release. `Download & Update` is enabled only when a newer version exists. After confirmation, the compiled app downloads the official EXE to a staging folder, verifies its GitHub-provided size and SHA-256 digest plus its embedded version, replaces the current app, and restarts. Save or copy any open capture windows first. Source runs and releases without a verifiable EXE fall back to the release page.
 
-Every push and pull request also runs the Windows build workflow with checksum-pinned official AutoHotkey and Ahk2Exe tools. CI publishes test artifacts only; it has no release permission.
+Every push and pull request also runs repository policy checks and the Windows build workflow with checksum-pinned official AutoHotkey and Ahk2Exe tools. CI publishes test artifacts only; it has no release permission.
 
 Recommended portable deployment structure:
 

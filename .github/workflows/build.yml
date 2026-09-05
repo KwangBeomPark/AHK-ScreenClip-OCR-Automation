@@ -18,6 +18,10 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
+      - name: Run repository policy checks
+        shell: pwsh
+        run: ./scripts/static-check.ps1
+
       - name: Download verified AutoHotkey build tools
         shell: pwsh
         run: |

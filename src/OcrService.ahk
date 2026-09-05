@@ -199,6 +199,17 @@ JoinOcrErrors(errors) {
     return text
 }
 
+GetOcrUserFailureMessage(error) {
+    error := ShortErrorMessage(error, 180)
+    if (InStr(error, "NO_LANGUAGE") || InStr(error, "Portable Tesseract is not installed")
+        || InStr(error, "language data is missing")) {
+        return "⚠️ 사용할 수 있는 로컬 OCR 언어가 없습니다.`r`n"
+            . "Windows OCR 언어를 설치하거나 회사용 Full 패키지(kor+eng)를 사용하세요.`r`n"
+            . "No matching OCR language is available. Install a Windows OCR language or use the Full package."
+    }
+    return "⚠️ 로컬 OCR 실패 / Local OCR failed: " error
+}
+
 RunLocalOcr(imagePath, engine, languages) {
     engine := NormalizeOcrEngine(engine)
     languages := NormalizeOcrLanguages(languages)

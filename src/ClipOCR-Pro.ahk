@@ -1,14 +1,15 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.4.0.0
+;@Ahk2Exe-SetVersion 1.5.0.0
 #Include Gdip_All.ahk
 #Include SuiteRegistry.ahk
 #Include OcrService.ahk
+#Include HealthCheck.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.4.0"
+global APP_VERSION := "1.5.0"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases"
@@ -340,8 +341,8 @@ UpdateImageTranslateMenu() {
 
 UpdateImageTranslateMenu()
 
-ClipMenu.Add("🌐 1. Google Translate (Image)", ImgTransMenu)
-ClipMenu.Add("🔤 2. Extract Text (Local OCR)", ExtractTextFromRightClickedClip)
+ClipMenu.Add("🔤 1. Extract Text (Local OCR)", ExtractTextFromRightClickedClip)
+ClipMenu.Add("🌐 2. Google Translate (Image)", ImgTransMenu)
 ClipMenu.Add() ; Separator
 
 ClipMenu.Add("🟥 3. Red Box (Shift+Drag)", MenuHandler)
@@ -2196,7 +2197,7 @@ ExtractTextFromRightClickedClip(*) {
             throw Error(result.error)
         ShowOcrResultPopup(result.text, result.engine, result.language, result.error)
     } catch as e {
-        ToolTip("⚠️ Local OCR failed: " ShortErrorMessage(e.Message, 180))
+        ToolTip(GetOcrUserFailureMessage(e.Message))
         SetTimer(() => ToolTip(), -4500)
     } finally {
         if inputBitmap
@@ -3178,158 +3179,6 @@ LaunchUpdateHelper(sourcePath, targetPath, expectedHash) {
     }
 }
 
-RunInternalHealthCheck() {
-    errors := []
-    healthDir := A_Temp "\ClipOCR-Pro"
-    healthLog := healthDir "\health-check.log"
-    Check(condition, message) {
-        if !condition
-            errors.Push(message)
-    }
-
-    Check(CompareSemanticVersions("1.10.0", "1.9.9") == 1, "semantic version comparison")
-    Check(ExtractSemanticVersion("Release v2.3.4") == "2.3.4", "semantic version extraction")
-    Check(NormalizeJpegQuality(80) == 80 && NormalizeJpegQuality(85) == 90, "JPG quality normalization")
-    Check(NormalizeSaveImageFormat("JPG") == "jpg" && NormalizeSaveImageFormat("gif") == "png",
-        "save image format normalization")
-    presetFixture := GetImageSavePresetOptions()
-    Check(presetFixture.Length == 4 && GetImageSavePresetIndex("png", 90) == 1
-        && GetImageSavePresetIndex("jpg", 80) == 3, "image save presets")
-    Check(NormalizeSuiteBoolean("True", false) && !NormalizeSuiteBoolean("0", true)
-        && NormalizeSuiteBoolean("invalid", true), "Suite boolean normalization")
-    Check(!ResolveBooleanSetting(true, "0", true, "True", true)
-        && !ResolveBooleanSetting(false, "", true, "False", true)
-        && ResolveBooleanSetting(false, "", false, "", true), "local and Suite boolean precedence")
-    Check(IsCaptureHotkeySupported("Win+Drag") && IsCaptureHotkeySupported("#LButton")
-        && !IsCaptureHotkeySupported("Alt+F4") && NormalizeCaptureHotkey("Alt+F4") == "#LButton",
-        "capture hotkey validation")
-    Check(IsTextTranslateHotkeySupported("#CapsLock") && IsTextTranslateHotkeySupported("^!CapsLock"),
-        "translation hotkey validation")
-    Check(NormalizeOcrEngine("WINDOWS") == "windows" && NormalizeOcrEngine("unknown") == "auto",
-        "OCR engine normalization")
-    Check(NormalizeOcrLanguages("ko_kr;EN-us;ko-KR") == "ko-KR,en-US"
-        && NormalizeOcrLanguages("invalid") == "ko-KR,en-US", "OCR language normalization")
-    Check(GetTesseractLanguageCode("ko-KR") == "kor" && GetTesseractLanguageCode("en-US") == "eng",
-        "Tesseract language mapping")
-    Check(FileExist(PrepareWindowsOcrHelper()), "embedded Windows OCR helper")
-
-    tessFixtureRoot := A_Temp "\clipocr_tessdata_" DllCall("GetCurrentProcessId")
-    try {
-        DirCreate(tessFixtureRoot)
-        FileAppend("fixture", tessFixtureRoot "\kor.traineddata", "UTF-8-RAW")
-        FileAppend("fixture", tessFixtureRoot "\eng.traineddata", "UTF-8-RAW")
-        resolvedTessFixture := ResolveTesseractLanguages("ko-KR,en-US,pl-PL", tessFixtureRoot)
-        Check(resolvedTessFixture.value == "kor+eng" && resolvedTessFixture.missing.Length == 1,
-            "Tesseract language data resolution")
-    } catch as e {
-        errors.Push("Tesseract fixtures: " ShortErrorMessage(e.Message))
-    } finally {
-        try {
-            if DirExist(tessFixtureRoot)
-                DirDelete(tessFixtureRoot, true)
-        }
-    }
-
-    saveFixtureRoot := A_Temp "\clipocr_settings_" DllCall("GetCurrentProcessId")
-    localSaveFixture := saveFixtureRoot "\local"
-    suiteSaveFixture := saveFixtureRoot "\suite"
-    try {
-        DirCreate(localSaveFixture)
-        DirCreate(suiteSaveFixture)
-        saveResolution := ResolveSaveFolderSetting(true, localSaveFixture, true, suiteSaveFixture)
-        Check(saveResolution.folder == localSaveFixture && saveResolution.source == "local",
-            "explicit save folder precedence")
-        saveResolution := ResolveSaveFolderSetting(false, "", true, suiteSaveFixture)
-        Check(saveResolution.folder == suiteSaveFixture && saveResolution.source == "suite",
-            "Suite save folder fallback")
-        saveResolution := ResolveSaveFolderSetting(true, "", true, suiteSaveFixture)
-        Check(saveResolution.folder == "" && saveResolution.source == "local",
-            "explicit Desktop save preference")
-        saveResolution := ResolveSaveFolderSetting(false, "", false, "")
-        Check(saveResolution.folder == "" && saveResolution.source == "desktop",
-            "Desktop save fallback")
-    } catch as e {
-        errors.Push("save folder fixtures: " ShortErrorMessage(e.Message))
-    } finally {
-        try {
-            if DirExist(saveFixtureRoot)
-                DirDelete(saveFixtureRoot, true)
-        }
-    }
-
-    fixtureHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    fixtureJson := '{"tag_name":"v9.8.7","name":"Release v9.8.7","html_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/tag/v9.8.7","assets":[{"name":"ClipOCR-Pro.v9.8.7.exe","size":1569280,"digest":"sha256:'
-    fixtureJson .= fixtureHash
-    fixtureJson .= '","browser_download_url":"https://github.com/KwangBeomPark/01_ClipOCR-Pro/releases/download/v9.8.7/ClipOCR-Pro.v9.8.7.exe"}]}'
-    releaseInfo := ParseGithubLatestRelease(fixtureJson)
-    Check(IsObject(releaseInfo), "GitHub release parsing")
-    if IsObject(releaseInfo) {
-        Check(releaseInfo.version == "9.8.7", "GitHub release version")
-        Check(releaseInfo.assetName == "ClipOCR-Pro.v9.8.7.exe", "GitHub asset selection")
-        Check(releaseInfo.assetSize == 1569280, "GitHub asset size")
-        Check(releaseInfo.sha256 == fixtureHash, "GitHub asset digest")
-    }
-
-    hashFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".txt"
-    try {
-        FileAppend("abc", hashFixture, "UTF-8-RAW")
-        Check(GetFileSha256(hashFixture) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            "SHA-256 calculation")
-    } catch as e {
-        errors.Push("SHA-256 fixture: " ShortErrorMessage(e.Message))
-    } finally {
-        try {
-            if FileExist(hashFixture)
-                FileDelete(hashFixture)
-        }
-    }
-
-    formatToken := 0
-    formatBitmap := 0
-    formatGraphics := 0
-    pngFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".png"
-    jpgFixture := A_Temp "\clipocr_health_" DllCall("GetCurrentProcessId") ".jpg"
-    try {
-        formatToken := Gdip_Startup()
-        formatBitmap := Gdip_CreateBitmap(64, 64)
-        formatGraphics := Gdip_GraphicsFromImage(formatBitmap)
-        Gdip_GraphicsClear(formatGraphics, 0xFFF4F4F4)
-        Check(SafeSaveBitmapToFile(formatBitmap, pngFixture, 100) && FileGetSize(pngFixture) > 0,
-            "PNG lossless save")
-        Check(SafeSaveBitmapToFile(formatBitmap, jpgFixture, 90) && FileGetSize(jpgFixture) > 0,
-            "JPG quality save")
-    } catch as e {
-        errors.Push("image format fixture: " ShortErrorMessage(e.Message))
-    } finally {
-        if formatGraphics
-            try Gdip_DeleteGraphics(formatGraphics)
-        if formatBitmap
-            try Gdip_DisposeImage(formatBitmap)
-        if formatToken
-            try Gdip_Shutdown(formatToken)
-        try {
-            if FileExist(pngFixture)
-                FileDelete(pngFixture)
-            if FileExist(jpgFixture)
-                FileDelete(jpgFixture)
-        }
-    }
-
-    try {
-        if !DirExist(healthDir)
-            DirCreate(healthDir)
-        if FileExist(healthLog)
-            FileDelete(healthLog)
-        if (errors.Length == 0) {
-            FileAppend("ClipOCR-Pro health check: PASS`r`n", healthLog, "UTF-8")
-            return 0
-        }
-        for _, message in errors
-            FileAppend("FAIL: " message "`r`n", healthLog, "UTF-8")
-    }
-    return 1
-}
-
 SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel) {
     TabGenBtn.Opt("cGray +BackgroundTrans")
     TabGenBtn.Redraw()
@@ -3656,7 +3505,7 @@ ShowDashboardDialog() {
     lbl5.SetFont("s10 Bold")
     AbtPanel.Push(lbl5)
 
-    AbtPanel.Push(DashGui.Add("Text", "x180 y90 w580 h20 +BackgroundTrans cGray", "Version " APP_VERSION " • Screen Capture, Annotation & Translation Tool"))
+    AbtPanel.Push(DashGui.Add("Text", "x180 y90 w580 h20 +BackgroundTrans cGray", "Version " APP_VERSION " • Capture, Local OCR, Annotation & Translation"))
 
     AbtPanel.Push(DashGui.Add("Text", "x180 y120 w580 h78 Background27272A", ""))
     UpdateStatusText := DashGui.Add("Text", "x195 y133 w300 h22 +BackgroundTrans cFFFFFF", "Update status: Not checked")
@@ -4009,7 +3858,7 @@ GetManualText(lang) {
             
             1. 📸 화면 캡처  (Win + 마우스 드래그)
                - Win 키를 누른 채 마우스 왼쪽 버튼으로 영역을 드래그합니다.
-               - 선택한 영역이 항상-위 플로팅 창으로 표시되고 자동으로 클립보드에 복사됩니다.
+               - 선택한 영역이 항상-위 플로팅 창으로 표시되며, 자동 복사 설정에 따라 클립보드에 복사됩니다.
             
             2. 🌐 선택 텍스트 번역  (Win + CapsLock)
                - 번역할 텍스트를 선택한 후 Win + CapsLock을 누릅니다.
@@ -4028,6 +3877,7 @@ GetManualText(lang) {
             • 더블클릭: 축소/복원 (미니 사이즈 ↔ 원래 크기)
             • 드래그: 창 이동
             • 우클릭: 컨텍스트 메뉴
+              🔤 Extract Text (Local OCR): 이미지를 외부로 보내지 않고 텍스트 추출
             
               🟥 Shift + 드래그: 빨간 테두리 박스 그리기
               🟨 Ctrl + 드래그: 노란 형광펜 하이라이트
@@ -4063,6 +3913,7 @@ GetManualText(lang) {
             • About 탭: GitHub 최신 버전 확인, 검증된 EXE 다운로드 및 자동 재시작
             • 번역 단축키: Win+CapsLock 등 5가지 옵션
             • 번역 결과 언어: 한국어, 영어, 폴란드어 등 유럽 언어 49개 지원
+            • 로컬 OCR: Auto/Windows/Tesseract 엔진 및 BCP 47 언어 순서 설정
         )"
     }
 
@@ -4077,7 +3928,7 @@ GetManualText(lang) {
             
             1. 📸 Przechwytywanie ekranu  (Win + przeciągnij myszą)
                - Przytrzymaj klawisz Win i przeciągnij lewym przyciskiem myszy.
-               - Zaznaczony obszar pojawi się jako okno pływające i zostanie skopiowany do schowka.
+               - Zaznaczony obszar pojawi się jako okno pływające; kopiowanie zależy od ustawienia automatycznego kopiowania.
             
             2. 🌐 Tłumaczenie zaznaczonego tekstu  (Win + CapsLock)
                - Zaznacz tekst, a następnie naciśnij Win + CapsLock.
@@ -4095,6 +3946,7 @@ GetManualText(lang) {
             • Podwójne kliknięcie: minimalizuj/przywróć
             • Przeciąganie: przesuń okno
             • Prawy przycisk myszy: menu kontekstowe
+              🔤 Extract Text (Local OCR): rozpoznaj tekst lokalnie bez wysyłania obrazu
             
               🟥 Shift + przeciągnij: czerwona ramka
               🟨 Ctrl + przeciągnij: żółte podświetlenie
@@ -4126,6 +3978,7 @@ GetManualText(lang) {
             • Karta About: sprawdzanie, pobieranie i instalacja aktualizacji GitHub
             • Skrót do tłumaczenia: 5 opcji
             • Język tłumaczenia: 49 języków europejskich
+            • Lokalny OCR: wybór silnika Auto/Windows/Tesseract i kolejności języków
         )"
     }
 
@@ -4140,7 +3993,7 @@ GetManualText(lang) {
             
             1. 📸 Bildschirmaufnahme  (Win + Maus ziehen)
                - Halten Sie Win gedrückt und ziehen Sie mit der linken Maustaste.
-               - Der ausgewählte Bereich wird als schwebendes Fenster angezeigt und in die Zwischenablage kopiert.
+               - Der Bereich erscheint als schwebendes Fenster; das Kopieren folgt der Auto-Kopieren-Einstellung.
             
             2. 🌐 Markierten Text übersetzen  (Win + CapsLock)
                - Wählen Sie Text aus und drücken Sie Win + CapsLock.
@@ -4158,6 +4011,7 @@ GetManualText(lang) {
             • Doppelklick: Minimieren/Wiederherstellen
             • Ziehen: Fenster verschieben
             • Rechtsklick: Kontextmenü
+              🔤 Extract Text (Local OCR): Text lokal erkennen, ohne das Bild hochzuladen
             
               🟥 Shift + Ziehen: Roten Rahmen zeichnen
               🟨 Strg + Ziehen: Gelbe Hervorhebung
@@ -4189,6 +4043,7 @@ GetManualText(lang) {
             • About-Tab: GitHub-Updates prüfen, herunterladen und installieren
             • Übersetzungs-Tastenkürzel: 5 Optionen
             • Übersetzungssprache: 49 europäische Sprachen
+            • Lokale OCR: Auto/Windows/Tesseract und Sprachreihenfolge auswählen
         )"
     }
 
@@ -4203,7 +4058,7 @@ GetManualText(lang) {
             
             1. 📸 Capture d'écran  (Win + glisser la souris)
                - Maintenez Win et glissez avec le bouton gauche de la souris.
-               - La zone sélectionnée s'affiche en fenêtre flottante et est copiée dans le presse-papiers.
+               - La zone s'affiche en fenêtre flottante ; la copie suit le réglage de copie automatique.
             
             2. 🌐 Traduire le texte sélectionné  (Win + CapsLock)
                - Sélectionnez du texte, puis appuyez sur Win + CapsLock.
@@ -4221,6 +4076,7 @@ GetManualText(lang) {
             • Double-clic : minimiser/restaurer
             • Glisser : déplacer la fenêtre
             • Clic droit : menu contextuel
+              🔤 Extract Text (Local OCR) : reconnaître le texte localement, sans envoyer l'image
             
               🟥 Shift + glisser : cadre rouge
               🟨 Ctrl + glisser : surlignage jaune
@@ -4252,6 +4108,7 @@ GetManualText(lang) {
             • Onglet About : vérifier, télécharger et installer les mises à jour GitHub
             • Raccourci de traduction : 5 options
             • Langue de traduction : 49 langues européennes
+            • OCR local : choix du moteur Auto/Windows/Tesseract et de l'ordre des langues
         )"
     }
 
@@ -4266,7 +4123,7 @@ GetManualText(lang) {
             
             1. 📸 Captura de pantalla  (Win + arrastrar ratón)
                - Mantenga Win pulsado y arrastre con el botón izquierdo del ratón.
-               - El área seleccionada aparece como ventana flotante y se copia al portapapeles.
+               - El área aparece como ventana flotante; la copia depende del ajuste de copia automática.
             
             2. 🌐 Traducir texto seleccionado  (Win + CapsLock)
                - Seleccione el texto y pulse Win + CapsLock.
@@ -4284,6 +4141,7 @@ GetManualText(lang) {
             • Doble clic: minimizar/restaurar
             • Arrastrar: mover la ventana
             • Clic derecho: menú contextual
+              🔤 Extract Text (Local OCR): reconocer texto localmente sin enviar la imagen
             
               🟥 Shift + arrastrar: marco rojo
               🟨 Ctrl + arrastrar: resaltado amarillo
@@ -4315,6 +4173,7 @@ GetManualText(lang) {
             • Pestaña About: buscar, descargar e instalar actualizaciones de GitHub
             • Atajo de traducción: 5 opciones
             • Idioma de traducción: 49 idiomas europeos
+            • OCR local: motor Auto/Windows/Tesseract y orden de idiomas
         )"
     }
 
@@ -4329,7 +4188,7 @@ GetManualText(lang) {
         
         1. 📸 Screen Capture  (Win + Mouse Drag)
            - Hold Win and drag with the left mouse button.
-           - The selected area appears as an always-on-top floating window and is auto-copied to clipboard.
+           - The selected area appears as an always-on-top floating window; clipboard copy follows the Auto-copy setting.
         
         2. 🌐 Translate Selected Text  (Win + CapsLock)
            - Select text, then press Win + CapsLock.
@@ -4348,6 +4207,7 @@ GetManualText(lang) {
         • Double-click: Minimize/Restore (mini size ↔ original)
         • Drag: Move window
         • Right-click: Context menu
+          🔤 Extract Text (Local OCR): recognize text locally without uploading the image
         
           🟥 Shift + Drag: Draw a red border box
           🟨 Ctrl + Drag: Yellow highlight
@@ -4383,5 +4243,6 @@ GetManualText(lang) {
         • About tab: Check GitHub, download a verified EXE, install, and restart
         • Translation hotkey: 5 options available
         • Translation language: 49 European languages supported
+        • Local OCR: choose Auto/Windows/Tesseract and the BCP 47 language order
     )"
 }

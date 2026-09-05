@@ -55,6 +55,16 @@ if ($source -notmatch ";@Ahk2Exe-SetVersion\s+$([regex]::Escape($expectedFileVer
     throw "APP_VERSION ($version) and Ahk2Exe file version ($expectedFileVersion) are not synchronized."
 }
 
+# Capture source provenance before this build creates or replaces any output files.
+$sourceCommit = ""
+$sourceTreeDirty = $false
+try {
+    $sourceCommit = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+    $sourceTreeDirty = [bool](& git -C $repoRoot status --porcelain 2>$null)
+} catch {
+    $sourceCommit = ""
+}
+
 $outputRoot = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
 } else {
@@ -69,6 +79,7 @@ $manifestPath = Join-Path $outputRoot "build-manifest.json"
 $checksumsPath = Join-Path $outputRoot "SHA256SUMS.txt"
 $fullZipPath = Join-Path $outputRoot "App03_ClipOCR-Pro_v$version-Full.zip"
 $portableOcrRoot = $null
+$portableOcrVersion = ""
 if (-not [string]::IsNullOrWhiteSpace($TesseractDirectory)) {
     $portableOcrRoot = if ([IO.Path]::IsPathRooted($TesseractDirectory)) {
         [IO.Path]::GetFullPath($TesseractDirectory)
@@ -83,6 +94,16 @@ if (-not [string]::IsNullOrWhiteSpace($TesseractDirectory)) {
         if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
             throw "Full OCR package requires an approved portable Tesseract runtime with kor and eng data: $requiredPath"
         }
+    }
+    $tesseractExe = Join-Path $portableOcrRoot "tesseract.exe"
+    $versionOutput = @(& $tesseractExe --version 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) {
+        throw "The approved Tesseract runtime could not be executed. Verify its DLLs and company deployment package."
+    }
+    $portableOcrVersion = [string]$versionOutput[0]
+    $languageOutput = @(& $tesseractExe --tessdata-dir (Join-Path $portableOcrRoot "tessdata") --list-langs 2>&1)
+    if ($LASTEXITCODE -ne 0 -or -not ($languageOutput -contains "kor") -or -not ($languageOutput -contains "eng")) {
+        throw "The approved Tesseract runtime did not report both kor and eng language data."
     }
 }
 $targetArtifacts = @($exePath, $zipPath, $manifestPath, $checksumsPath)
@@ -193,24 +214,17 @@ $artifactInfo = foreach ($path in $artifactPaths) {
 $checksumLines = $artifactInfo | ForEach-Object { "$($_.sha256)  $($_.name)" }
 Set-Content -LiteralPath $checksumsPath -Value $checksumLines -Encoding utf8NoBOM
 
-$commit = ""
-$workingTreeDirty = $false
-try {
-    $commit = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
-    $workingTreeDirty = [bool](& git -C $repoRoot status --porcelain 2>$null)
-} catch {
-    $commit = ""
-}
 $manifest = [ordered]@{
     application     = "ClipOCR-Pro"
     version         = $version
     fileVersion     = $expectedFileVersion
-    commit          = $commit
-    workingTreeDirty = $workingTreeDirty
+    commit          = $sourceCommit
+    workingTreeDirty = $sourceTreeDirty
     builtAtUtc      = [DateTime]::UtcNow.ToString("o")
     signed          = $signed
     signatureStatus = $signatureStatus
     fullOcrPackage  = ($null -ne $portableOcrRoot)
+    portableOcrVersion = $portableOcrVersion
     artifacts       = @($artifactInfo)
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM

@@ -120,7 +120,7 @@ HKCU\Software\ScreenClipTool
 
 설정창 About 탭을 열면 GitHub 최신 릴리즈를 확인합니다. 새 버전이 있을 때만 `Download & Update` 버튼이 활성화됩니다. 사용자가 확인하면 공식 EXE를 임시 폴더에 다운로드하고, GitHub가 제공하는 파일 크기와 SHA-256 해시 및 실행 파일 버전을 검증한 뒤 현재 앱을 교체하고 재실행합니다. 업데이트 전에는 열려 있는 캡처 창을 저장하거나 복사해야 합니다. 소스 코드로 실행 중이거나 검증 가능한 EXE 자산이 없으면 릴리즈 페이지만 엽니다.
 
-모든 push와 pull request는 해시가 고정된 공식 AutoHotkey/Ahk2Exe 도구로 Windows 빌드를 수행합니다. CI는 시험 산출물만 제공하며 릴리즈 쓰기 권한은 없습니다.
+모든 push와 pull request는 저장소 정책 검사와 해시가 고정된 공식 AutoHotkey/Ahk2Exe 도구로 Windows 빌드를 수행합니다. CI는 시험 산출물만 제공하며 릴리즈 쓰기 권한은 없습니다.
 
 권장 포터블 배포 구조:
 
